@@ -1,0 +1,17 @@
+# macOS
+.DS_Store
+
+# env
+.env
+.env.*
+
+# frontend build/cache
+frontend/node_modules/
+frontend/dist/
+frontend/*.tsbuildinfo
+
+# backend build/cache
+backend/target/
+
+# app runtime data
+uploads/
