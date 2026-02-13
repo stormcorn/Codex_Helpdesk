@@ -1,6 +1,7 @@
 package com.example.demo.group;
 
 import com.example.demo.auth.AuthService;
+import com.example.demo.auth.Member;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
@@ -39,8 +40,8 @@ public class AdminGroupController {
             @RequestHeader(value = "Authorization", required = false) String authorization,
             @RequestBody CreateGroupRequest request
     ) {
-        authService.requireAdmin(authorization);
-        return GroupResponse.from(groupService.createGroup(request.name()));
+        Member admin = authService.requireAdmin(authorization);
+        return GroupResponse.from(groupService.createGroup(admin, request.name()));
     }
 
     @PatchMapping("/{groupId}/members/{memberId}")
@@ -49,8 +50,8 @@ public class AdminGroupController {
             @PathVariable Long groupId,
             @PathVariable Long memberId
     ) {
-        authService.requireAdmin(authorization);
-        return GroupResponse.from(groupService.addMember(groupId, memberId));
+        Member admin = authService.requireAdmin(authorization);
+        return GroupResponse.from(groupService.addMember(admin, groupId, memberId));
     }
 
     @DeleteMapping("/{groupId}/members/{memberId}")
@@ -59,8 +60,8 @@ public class AdminGroupController {
             @PathVariable Long groupId,
             @PathVariable Long memberId
     ) {
-        authService.requireAdmin(authorization);
-        return GroupResponse.from(groupService.removeMember(groupId, memberId));
+        Member admin = authService.requireAdmin(authorization);
+        return GroupResponse.from(groupService.removeMember(admin, groupId, memberId));
     }
 
     @PatchMapping("/{groupId}/supervisor/{memberId}")
@@ -69,8 +70,8 @@ public class AdminGroupController {
             @PathVariable Long groupId,
             @PathVariable Long memberId
     ) {
-        authService.requireAdmin(authorization);
-        return GroupResponse.from(groupService.setSupervisor(groupId, memberId));
+        Member admin = authService.requireAdmin(authorization);
+        return GroupResponse.from(groupService.setSupervisor(admin, groupId, memberId));
     }
 
     public record CreateGroupRequest(String name) {

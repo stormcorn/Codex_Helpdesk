@@ -37,6 +37,22 @@ const loadingGroups = ref(false);
 const groupsFeedback = ref('');
 const createGroupName = ref('');
 const groupAssignForm = reactive({ groupId: null, memberId: null });
+const auditLogs = ref([]);
+const loadingAuditLogs = ref(false);
+const exportingAuditLogs = ref(false);
+const purgingAuditLogs = ref(false);
+const auditLogsFeedback = ref('');
+const auditCleanupFeedback = ref('');
+const auditFilters = reactive({
+    action: '',
+    entityType: '',
+    entityId: '',
+    actorMemberId: '',
+    from: '',
+    to: '',
+    limit: 100
+});
+const auditCleanupDays = ref(180);
 const replyInputs = reactive({});
 const statusDrafts = reactive({});
 const itActionLoading = reactive({});
@@ -292,6 +308,7 @@ async function afterLoginLoad() {
         dashboardTab.value = 'members';
         await loadMembers();
         await loadAdminGroups();
+        await loadAuditLogs();
     }
     else if (isItOrAdmin.value) {
         dashboardTab.value = 'itdesk';
@@ -323,6 +340,8 @@ function clearSession() {
     createGroupName.value = '';
     groupAssignForm.groupId = null;
     groupAssignForm.memberId = null;
+    auditLogs.value = [];
+    auditLogsFeedback.value = '';
     notifications.value = [];
     unreadCount.value = 0;
     notificationsOpen.value = false;
@@ -767,6 +786,137 @@ async function deleteMember(member) {
         membersFeedback.value = e instanceof Error ? e.message : '刪除失敗';
     }
 }
+function formatJsonPreview(raw) {
+    if (!raw)
+        return '-';
+    try {
+        const parsed = JSON.parse(raw);
+        return JSON.stringify(parsed, null, 2);
+    }
+    catch {
+        return raw;
+    }
+}
+function trimmedText(value, max = 140) {
+    const text = value.trim();
+    if (!text)
+        return '';
+    return text.length <= max ? text : `${text.slice(0, max)}...`;
+}
+async function loadAuditLogs() {
+    if (!isAdmin.value)
+        return;
+    loadingAuditLogs.value = true;
+    auditLogsFeedback.value = '';
+    try {
+        const params = new URLSearchParams();
+        const action = trimmedText(auditFilters.action, 80).toUpperCase();
+        const entityType = trimmedText(auditFilters.entityType, 80).toUpperCase();
+        const entityId = trimmedText(auditFilters.entityId, 40);
+        const actorMemberId = trimmedText(auditFilters.actorMemberId, 40);
+        const from = trimmedText(auditFilters.from, 40);
+        const to = trimmedText(auditFilters.to, 40);
+        const safeLimit = Math.min(Math.max(Number(auditFilters.limit) || 100, 1), 500);
+        if (action)
+            params.set('action', action);
+        if (entityType)
+            params.set('entityType', entityType);
+        if (entityId)
+            params.set('entityId', entityId);
+        if (actorMemberId)
+            params.set('actorMemberId', actorMemberId);
+        if (from)
+            params.set('from', from);
+        if (to)
+            params.set('to', to);
+        params.set('limit', String(safeLimit));
+        const query = params.toString();
+        const url = query ? `/api/admin/audit-logs?${query}` : '/api/admin/audit-logs';
+        auditLogs.value = await requestJson(url, { headers: authHeaders() }, '讀取操作紀錄失敗');
+    }
+    catch (e) {
+        auditLogsFeedback.value = e instanceof Error ? e.message : '讀取操作紀錄失敗';
+    }
+    finally {
+        loadingAuditLogs.value = false;
+    }
+}
+async function exportAuditLogsCsv() {
+    if (!isAdmin.value)
+        return;
+    exportingAuditLogs.value = true;
+    auditLogsFeedback.value = '';
+    try {
+        const params = new URLSearchParams();
+        const action = trimmedText(auditFilters.action, 80).toUpperCase();
+        const entityType = trimmedText(auditFilters.entityType, 80).toUpperCase();
+        const entityId = trimmedText(auditFilters.entityId, 40);
+        const actorMemberId = trimmedText(auditFilters.actorMemberId, 40);
+        const from = trimmedText(auditFilters.from, 40);
+        const to = trimmedText(auditFilters.to, 40);
+        const safeLimit = Math.min(Math.max(Number(auditFilters.limit) || 500, 1), 500);
+        if (action)
+            params.set('action', action);
+        if (entityType)
+            params.set('entityType', entityType);
+        if (entityId)
+            params.set('entityId', entityId);
+        if (actorMemberId)
+            params.set('actorMemberId', actorMemberId);
+        if (from)
+            params.set('from', from);
+        if (to)
+            params.set('to', to);
+        params.set('limit', String(safeLimit));
+        const query = params.toString();
+        const url = query ? `/api/admin/audit-logs/export.csv?${query}` : '/api/admin/audit-logs/export.csv';
+        const response = await fetch(url, { headers: authHeaders() });
+        if (!response.ok) {
+            let parsed = null;
+            try {
+                parsed = await response.json();
+            }
+            catch {
+                // ignore
+            }
+            throw new Error(parseErrorMessage('匯出 CSV 失敗', parsed));
+        }
+        const blob = await response.blob();
+        const disposition = response.headers.get('Content-Disposition') ?? '';
+        const matched = disposition.match(/filename="([^"]+)"/i);
+        const filename = matched?.[1] ?? 'audit-logs.csv';
+        const objectUrl = URL.createObjectURL(blob);
+        const anchor = document.createElement('a');
+        anchor.href = objectUrl;
+        anchor.download = filename;
+        anchor.click();
+        URL.revokeObjectURL(objectUrl);
+    }
+    catch (e) {
+        auditLogsFeedback.value = e instanceof Error ? e.message : '匯出 CSV 失敗';
+    }
+    finally {
+        exportingAuditLogs.value = false;
+    }
+}
+async function purgeAuditLogs() {
+    if (!isAdmin.value)
+        return;
+    purgingAuditLogs.value = true;
+    auditCleanupFeedback.value = '';
+    try {
+        const safeDays = Math.min(Math.max(Number(auditCleanupDays.value) || 180, 1), 3650);
+        const response = await requestJson(`/api/admin/audit-logs/cleanup?days=${safeDays}`, { method: 'POST', headers: authHeaders() }, '清理操作紀錄失敗');
+        auditCleanupFeedback.value = `清理完成：候選 ${response.candidateCount} 筆，刪除 ${response.deletedCount} 筆（cutoff: ${new Date(response.cutoff).toLocaleString()}）`;
+        await loadAuditLogs();
+    }
+    catch (e) {
+        auditCleanupFeedback.value = e instanceof Error ? e.message : '清理操作紀錄失敗';
+    }
+    finally {
+        purgingAuditLogs.value = false;
+    }
+}
 onMounted(async () => {
     await restoreSession();
 });
@@ -1033,6 +1183,7 @@ else {
                     __VLS_ctx.dashboardTab = 'members';
                     __VLS_ctx.loadMembers();
                     __VLS_ctx.loadAdminGroups();
+                    __VLS_ctx.loadAuditLogs();
                 } },
             ...{ class: ({ active: __VLS_ctx.dashboardTab === 'members' }) },
         });
@@ -1747,6 +1898,150 @@ else {
                 }
             }
         }
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
+            ...{ class: "audit-admin" },
+        });
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
+            ...{ class: "audit-head" },
+        });
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.h3, __VLS_intrinsicElements.h3)({});
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
+            ...{ class: "row" },
+        });
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.button, __VLS_intrinsicElements.button)({
+            ...{ onClick: (__VLS_ctx.loadAuditLogs) },
+            type: "button",
+        });
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.button, __VLS_intrinsicElements.button)({
+            ...{ onClick: (__VLS_ctx.exportAuditLogsCsv) },
+            type: "button",
+            disabled: (__VLS_ctx.exportingAuditLogs),
+        });
+        (__VLS_ctx.exportingAuditLogs ? '匯出中...' : '匯出 CSV');
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.p, __VLS_intrinsicElements.p)({
+            ...{ class: "subtitle" },
+        });
+        if (__VLS_ctx.auditLogsFeedback) {
+            __VLS_asFunctionalElement(__VLS_intrinsicElements.p, __VLS_intrinsicElements.p)({
+                ...{ class: "feedback error" },
+            });
+            (__VLS_ctx.auditLogsFeedback);
+        }
+        if (__VLS_ctx.auditCleanupFeedback) {
+            __VLS_asFunctionalElement(__VLS_intrinsicElements.p, __VLS_intrinsicElements.p)({
+                ...{ class: "feedback" },
+            });
+            (__VLS_ctx.auditCleanupFeedback);
+        }
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
+            ...{ class: "row" },
+        });
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.label, __VLS_intrinsicElements.label)({});
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.input)({
+            type: "number",
+            min: "1",
+            max: "3650",
+        });
+        (__VLS_ctx.auditCleanupDays);
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.button, __VLS_intrinsicElements.button)({
+            ...{ onClick: (__VLS_ctx.purgeAuditLogs) },
+            type: "button",
+            ...{ class: "danger" },
+            disabled: (__VLS_ctx.purgingAuditLogs),
+        });
+        (__VLS_ctx.purgingAuditLogs ? '清理中...' : '執行清理');
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
+            ...{ class: "audit-filters" },
+        });
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.label, __VLS_intrinsicElements.label)({});
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.input)({
+            placeholder: "例如 TICKET_STATUS_UPDATED",
+        });
+        (__VLS_ctx.auditFilters.action);
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.label, __VLS_intrinsicElements.label)({});
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.input)({
+            placeholder: "例如 TICKET / GROUP",
+        });
+        (__VLS_ctx.auditFilters.entityType);
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.label, __VLS_intrinsicElements.label)({});
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.input)({
+            placeholder: "例如 123",
+        });
+        (__VLS_ctx.auditFilters.entityId);
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.label, __VLS_intrinsicElements.label)({});
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.input)({
+            placeholder: "例如 5",
+        });
+        (__VLS_ctx.auditFilters.actorMemberId);
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.label, __VLS_intrinsicElements.label)({});
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.input)({
+            placeholder: "2026-02-13T00:00:00Z",
+        });
+        (__VLS_ctx.auditFilters.from);
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.label, __VLS_intrinsicElements.label)({});
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.input)({
+            placeholder: "2026-02-13T23:59:59Z",
+        });
+        (__VLS_ctx.auditFilters.to);
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.label, __VLS_intrinsicElements.label)({});
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.input)({
+            type: "number",
+            min: "1",
+            max: "500",
+        });
+        (__VLS_ctx.auditFilters.limit);
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.button, __VLS_intrinsicElements.button)({
+            ...{ onClick: (__VLS_ctx.loadAuditLogs) },
+            type: "button",
+        });
+        if (__VLS_ctx.loadingAuditLogs) {
+            __VLS_asFunctionalElement(__VLS_intrinsicElements.p, __VLS_intrinsicElements.p)({});
+        }
+        else if (!__VLS_ctx.auditLogs.length) {
+            __VLS_asFunctionalElement(__VLS_intrinsicElements.p, __VLS_intrinsicElements.p)({});
+        }
+        else {
+            __VLS_asFunctionalElement(__VLS_intrinsicElements.ul, __VLS_intrinsicElements.ul)({
+                ...{ class: "simple-list audit-log-list" },
+            });
+            for (const [log] of __VLS_getVForSourceType((__VLS_ctx.auditLogs))) {
+                __VLS_asFunctionalElement(__VLS_intrinsicElements.li, __VLS_intrinsicElements.li)({
+                    key: (log.id),
+                    ...{ class: "audit-log-card" },
+                });
+                __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
+                    ...{ class: "audit-log-title" },
+                });
+                __VLS_asFunctionalElement(__VLS_intrinsicElements.strong, __VLS_intrinsicElements.strong)({});
+                (log.id);
+                (log.action);
+                __VLS_asFunctionalElement(__VLS_intrinsicElements.small, __VLS_intrinsicElements.small)({});
+                (new Date(log.createdAt).toLocaleString());
+                __VLS_asFunctionalElement(__VLS_intrinsicElements.small, __VLS_intrinsicElements.small)({});
+                (log.actorRole);
+                (log.actorName);
+                (log.actorEmployeeId);
+                (log.entityType);
+                (log.entityId ?? '-');
+                __VLS_asFunctionalElement(__VLS_intrinsicElements.details, __VLS_intrinsicElements.details)({});
+                __VLS_asFunctionalElement(__VLS_intrinsicElements.summary, __VLS_intrinsicElements.summary)({});
+                __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
+                    ...{ class: "audit-log-json-grid" },
+                });
+                __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({});
+                __VLS_asFunctionalElement(__VLS_intrinsicElements.h4, __VLS_intrinsicElements.h4)({});
+                __VLS_asFunctionalElement(__VLS_intrinsicElements.pre, __VLS_intrinsicElements.pre)({});
+                (__VLS_ctx.formatJsonPreview(log.beforeJson));
+                __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({});
+                __VLS_asFunctionalElement(__VLS_intrinsicElements.h4, __VLS_intrinsicElements.h4)({});
+                __VLS_asFunctionalElement(__VLS_intrinsicElements.pre, __VLS_intrinsicElements.pre)({});
+                (__VLS_ctx.formatJsonPreview(log.afterJson));
+                __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({});
+                __VLS_asFunctionalElement(__VLS_intrinsicElements.h4, __VLS_intrinsicElements.h4)({});
+                __VLS_asFunctionalElement(__VLS_intrinsicElements.pre, __VLS_intrinsicElements.pre)({});
+                (__VLS_ctx.formatJsonPreview(log.metadataJson));
+            }
+        }
     }
     if (__VLS_ctx.lightboxOpen) {
         __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
@@ -1853,6 +2148,21 @@ else {
 /** @type {__VLS_StyleScopedClasses['group-supervisor-chip']} */ ;
 /** @type {__VLS_StyleScopedClasses['row']} */ ;
 /** @type {__VLS_StyleScopedClasses['danger']} */ ;
+/** @type {__VLS_StyleScopedClasses['audit-admin']} */ ;
+/** @type {__VLS_StyleScopedClasses['audit-head']} */ ;
+/** @type {__VLS_StyleScopedClasses['row']} */ ;
+/** @type {__VLS_StyleScopedClasses['subtitle']} */ ;
+/** @type {__VLS_StyleScopedClasses['feedback']} */ ;
+/** @type {__VLS_StyleScopedClasses['error']} */ ;
+/** @type {__VLS_StyleScopedClasses['feedback']} */ ;
+/** @type {__VLS_StyleScopedClasses['row']} */ ;
+/** @type {__VLS_StyleScopedClasses['danger']} */ ;
+/** @type {__VLS_StyleScopedClasses['audit-filters']} */ ;
+/** @type {__VLS_StyleScopedClasses['simple-list']} */ ;
+/** @type {__VLS_StyleScopedClasses['audit-log-list']} */ ;
+/** @type {__VLS_StyleScopedClasses['audit-log-card']} */ ;
+/** @type {__VLS_StyleScopedClasses['audit-log-title']} */ ;
+/** @type {__VLS_StyleScopedClasses['audit-log-json-grid']} */ ;
 /** @type {__VLS_StyleScopedClasses['lightbox']} */ ;
 /** @type {__VLS_StyleScopedClasses['lightbox-body']} */ ;
 var __VLS_dollars;
@@ -1887,6 +2197,14 @@ const __VLS_self = (await import('vue')).defineComponent({
             groupsFeedback: groupsFeedback,
             createGroupName: createGroupName,
             groupAssignForm: groupAssignForm,
+            auditLogs: auditLogs,
+            loadingAuditLogs: loadingAuditLogs,
+            exportingAuditLogs: exportingAuditLogs,
+            purgingAuditLogs: purgingAuditLogs,
+            auditLogsFeedback: auditLogsFeedback,
+            auditCleanupFeedback: auditCleanupFeedback,
+            auditFilters: auditFilters,
+            auditCleanupDays: auditCleanupDays,
             replyInputs: replyInputs,
             statusDrafts: statusDrafts,
             itActionLoading: itActionLoading,
@@ -1941,6 +2259,10 @@ const __VLS_self = (await import('vue')).defineComponent({
             setGroupSupervisor: setGroupSupervisor,
             updateMemberRole: updateMemberRole,
             deleteMember: deleteMember,
+            formatJsonPreview: formatJsonPreview,
+            loadAuditLogs: loadAuditLogs,
+            exportAuditLogsCsv: exportAuditLogsCsv,
+            purgeAuditLogs: purgeAuditLogs,
         };
     },
 });

@@ -1,7 +1,10 @@
 package com.example.demo.helpdesk;
 
+import com.example.demo.audit.AuditLogService;
 import com.example.demo.auth.Member;
 import com.example.demo.auth.MemberRole;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.example.demo.group.DepartmentGroup;
 import com.example.demo.group.DepartmentGroupService;
 import com.example.demo.notification.NotificationService;
@@ -19,7 +22,9 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.Collection;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 import static org.springframework.http.HttpStatus.FORBIDDEN;
@@ -34,6 +39,8 @@ public class HelpdeskTicketService {
     private final HelpdeskTicketRepository repository;
     private final HelpdeskAttachmentRepository attachmentRepository;
     private final HelpdeskTicketMessageRepository messageRepository;
+    private final AuditLogService auditLogService;
+    private final ObjectMapper objectMapper;
     private final DepartmentGroupService groupService;
     private final NotificationService notificationService;
     private final Path uploadDir;
@@ -42,6 +49,8 @@ public class HelpdeskTicketService {
             HelpdeskTicketRepository repository,
             HelpdeskAttachmentRepository attachmentRepository,
             HelpdeskTicketMessageRepository messageRepository,
+            AuditLogService auditLogService,
+            ObjectMapper objectMapper,
             DepartmentGroupService groupService,
             NotificationService notificationService,
             @Value("${helpdesk.upload-dir:/tmp/helpdesk-uploads}") String uploadDir
@@ -49,6 +58,8 @@ public class HelpdeskTicketService {
         this.repository = repository;
         this.attachmentRepository = attachmentRepository;
         this.messageRepository = messageRepository;
+        this.auditLogService = auditLogService;
+        this.objectMapper = objectMapper;
         this.groupService = groupService;
         this.notificationService = notificationService;
         this.uploadDir = Path.of(uploadDir);
@@ -118,6 +129,15 @@ public class HelpdeskTicketService {
         }
 
         HelpdeskTicket finalTicket = repository.save(savedTicket);
+        auditLogService.record(
+                creator,
+                "TICKET_CREATE",
+                "TICKET",
+                finalTicket.getId(),
+                null,
+                toJson(ticketSnapshot(finalTicket)),
+                toJson(Map.of("attachmentsCount", finalTicket.getAttachments().size()))
+        );
         notificationService.notifyTicketCreated(finalTicket, creator);
         return finalTicket;
     }
@@ -154,20 +174,34 @@ public class HelpdeskTicketService {
     public HelpdeskTicket changeStatus(Long ticketId, HelpdeskTicketStatus status) {
         HelpdeskTicket ticket = repository.findById(ticketId)
                 .orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "Ticket not found"));
+        Map<String, Object> before = ticketSnapshot(ticket);
         HelpdeskTicketStatus fromStatus = ticket.getStatus();
         ticket.setStatus(status);
         if (fromStatus != status) {
             appendStatusHistory(ticket, fromStatus, status, null);
         }
         repository.save(ticket);
-        return repository.findWithDetailsById(ticketId)
+        HelpdeskTicket updated = repository.findWithDetailsById(ticketId)
                 .orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "Ticket not found"));
+        if (fromStatus != status) {
+            auditLogService.record(
+                    null,
+                    "TICKET_STATUS_CHANGE",
+                    "TICKET",
+                    updated.getId(),
+                    toJson(before),
+                    toJson(ticketSnapshot(updated)),
+                    toJson(Map.of("fromStatus", fromStatus.name(), "toStatus", status.name()))
+            );
+        }
+        return updated;
     }
 
     @Transactional
     public HelpdeskTicket changeStatus(Long ticketId, Member actor, HelpdeskTicketStatus status) {
         HelpdeskTicket ticket = repository.findById(ticketId)
                 .orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "Ticket not found"));
+        Map<String, Object> before = ticketSnapshot(ticket);
         HelpdeskTicketStatus fromStatus = ticket.getStatus();
         ticket.setStatus(status);
         if (fromStatus != status) {
@@ -176,6 +210,17 @@ public class HelpdeskTicketService {
         repository.save(ticket);
         HelpdeskTicket updated = repository.findWithDetailsById(ticketId)
                 .orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "Ticket not found"));
+        if (fromStatus != status) {
+            auditLogService.record(
+                    actor,
+                    "TICKET_STATUS_CHANGE",
+                    "TICKET",
+                    updated.getId(),
+                    toJson(before),
+                    toJson(ticketSnapshot(updated)),
+                    toJson(Map.of("fromStatus", fromStatus.name(), "toStatus", status.name()))
+            );
+        }
         notificationService.notifyTicketStatusChanged(updated, actor, status);
         return updated;
     }
@@ -184,6 +229,7 @@ public class HelpdeskTicketService {
     public HelpdeskTicket softDelete(Long ticketId, Member actor) {
         HelpdeskTicket ticket = repository.findById(ticketId)
                 .orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "Ticket not found"));
+        Map<String, Object> before = ticketSnapshot(ticket);
         Long ownerId = ticket.getCreatedByMemberId();
         boolean isOwner = ownerId != null && ownerId.equals(actor.getId());
         boolean isPrivileged = actor.getRole() == MemberRole.IT || actor.getRole() == MemberRole.ADMIN;
@@ -196,14 +242,27 @@ public class HelpdeskTicketService {
             appendStatusHistory(ticket, fromStatus, HelpdeskTicketStatus.DELETED, actor);
         }
         repository.save(ticket);
-        return repository.findWithDetailsById(ticketId)
+        HelpdeskTicket updated = repository.findWithDetailsById(ticketId)
                 .orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "Ticket not found"));
+        if (fromStatus != HelpdeskTicketStatus.DELETED) {
+            auditLogService.record(
+                    actor,
+                    "TICKET_SOFT_DELETE",
+                    "TICKET",
+                    updated.getId(),
+                    toJson(before),
+                    toJson(ticketSnapshot(updated)),
+                    toJson(Map.of("fromStatus", fromStatus.name(), "toStatus", HelpdeskTicketStatus.DELETED.name()))
+            );
+        }
+        return updated;
     }
 
     @Transactional
     public HelpdeskTicket approveUrgentTicket(Long ticketId, Member actor) {
         HelpdeskTicket ticket = repository.findById(ticketId)
                 .orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "Ticket not found"));
+        Map<String, Object> before = ticketSnapshot(ticket);
         if (ticket.getPriority() != HelpdeskTicketPriority.URGENT) {
             throw new ResponseStatusException(FORBIDDEN, "Only urgent tickets require supervisor approval");
         }
@@ -214,8 +273,20 @@ public class HelpdeskTicketService {
             ticket.markSupervisorApproved(actor.getId());
             repository.save(ticket);
         }
-        return repository.findWithDetailsById(ticketId)
+        HelpdeskTicket updated = repository.findWithDetailsById(ticketId)
                 .orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "Ticket not found"));
+        if (!Boolean.TRUE.equals(before.get("supervisorApproved"))) {
+            auditLogService.record(
+                    actor,
+                    "TICKET_SUPERVISOR_APPROVE",
+                    "TICKET",
+                    updated.getId(),
+                    toJson(before),
+                    toJson(ticketSnapshot(updated)),
+                    toJson(Map.of("groupId", updated.getGroup() == null ? null : updated.getGroup().getId()))
+            );
+        }
+        return updated;
     }
 
     public AttachmentDownload getAttachment(Long ticketId, Long attachmentId) {
@@ -275,6 +346,26 @@ public class HelpdeskTicketService {
                 name,
                 role
         ));
+    }
+
+    private Map<String, Object> ticketSnapshot(HelpdeskTicket ticket) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("id", ticket.getId());
+        out.put("status", ticket.getStatus().name());
+        out.put("priority", ticket.getPriority().name());
+        out.put("deleted", ticket.isDeleted());
+        out.put("supervisorApproved", ticket.isSupervisorApproved());
+        out.put("groupId", ticket.getGroup() == null ? null : ticket.getGroup().getId());
+        out.put("groupName", ticket.getGroup() == null ? null : ticket.getGroup().getName());
+        return out;
+    }
+
+    private String toJson(Object value) {
+        try {
+            return objectMapper.writeValueAsString(value);
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException("Failed to serialize audit payload", e);
+        }
     }
 
     public record AttachmentDownload(Path path, String originalFilename, String contentType) {

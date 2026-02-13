@@ -10,6 +10,7 @@
 - 部門群組管理（Admin 建立群組、指派成員、設定群組主管）
 - 急件主管確認（由該群組主管確認，不是 ADMIN 角色本身）
 - 工單狀態歷程
+- 作業稽核紀錄（Audit Log）
 - 通知中心（跳轉、自動展開、高亮）
 - 工單篩選/搜尋/排序
 
@@ -74,6 +75,13 @@
 - 圖片附件可預覽（燈箱）
 - 非圖片附件可下載
 
+### 7. 稽核與追蹤（Audit + Trace）
+- Admin 可在前端成員管理頁查詢操作紀錄（依 action/entity/time/操作者篩選）
+- 支援 CSV 匯出（可帶篩選條件）
+- 支援保留期限與清理（排程 + 手動）
+- 每筆業務 audit metadata 會自動帶入 `traceId`
+- Access log 與 Audit log 可用同一個 `traceId` 串起來追查
+
 ## API 重點（摘要）
 ### Auth / 成員
 - `POST /api/auth/register`
@@ -107,6 +115,14 @@
 - `GET /api/notifications`
 - `PATCH /api/notifications/{id}/read`
 - `PATCH /api/notifications/read-all`
+
+### 稽核（Admin）
+- `GET /api/admin/audit-logs`
+  - query: `action`, `entityType`, `entityId`, `actorMemberId`, `from`, `to`, `limit`
+- `GET /api/admin/audit-logs/export.csv`
+  - 同上篩選條件，回傳 CSV 附件
+- `POST /api/admin/audit-logs/cleanup`
+  - query: `days`（可選，未帶則用系統保留天數）
 
 ## 專案結構
 - `frontend`：前端應用（Vue + TS）
@@ -174,6 +190,28 @@ npm run dev
 - `SPRING_DATASOURCE_PASSWORD`
 - `HELPDESK_UPLOAD_DIR`
 - `APP_ADMIN_*`
+- `APP_AUDIT_RETENTION_DAYS`（預設 `180`）
+- `APP_AUDIT_CLEANUP_CRON`（預設 `0 30 3 * * *`，每日 03:30 清理）
+
+## Log 與稽核維運
+### 1. Access log 追蹤
+- 後端每次請求會回傳 `X-Trace-Id`。
+- 可由 client 主動帶 `X-Trace-Id`，若未帶則後端自動產生。
+- 日誌會輸出 method/path/status/duration/ip 與 `traceId`。
+
+### 2. Audit log 查詢建議
+- 常用篩選：
+  - `action=TICKET_STATUS_CHANGE`
+  - `entityType=TICKET`
+  - `from/to` 使用 ISO-8601，例如 `2026-02-13T00:00:00Z`
+- `limit` 建議 100~500，避免一次查太大。
+
+### 3. Audit 清理策略
+- 正式環境建議保留 90~365 天（依公司稽核規範調整）。
+- 例：保留 180 天
+  - `APP_AUDIT_RETENTION_DAYS=180`
+- 例：每天凌晨 2:00 執行
+  - `APP_AUDIT_CLEANUP_CRON=0 0 2 * * *`
 
 ## 操作手冊
 ### USER
@@ -197,4 +235,8 @@ npm run dev
    - 建立群組
    - 指派成員加入群組
    - 將群組成員設為主管
-3. 可監控通知與工單整體流量。
+3. 在「操作紀錄（Audit Log）」可：
+   - 依條件查詢紀錄
+   - 匯出 CSV
+   - 執行清理（輸入保留天數）
+4. 可監控通知與工單整體流量。

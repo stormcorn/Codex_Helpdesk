@@ -98,6 +98,21 @@ type NotificationListResponse = {
   unreadCount: number;
 };
 
+type AuditLogItem = {
+  id: number;
+  actorMemberId: number | null;
+  actorEmployeeId: string;
+  actorName: string;
+  actorRole: string;
+  action: string;
+  entityType: string;
+  entityId: number | null;
+  beforeJson: string | null;
+  afterJson: string | null;
+  metadataJson: string | null;
+  createdAt: string;
+};
+
 const TOKEN_KEY = 'helpdesk_auth_token';
 const MAX_FILE_BYTES = 5 * 1024 * 1024;
 
@@ -148,6 +163,30 @@ const loadingGroups = ref(false);
 const groupsFeedback = ref('');
 const createGroupName = ref('');
 const groupAssignForm = reactive<{ groupId: number | null; memberId: number | null }>({ groupId: null, memberId: null });
+const auditLogs = ref<AuditLogItem[]>([]);
+const loadingAuditLogs = ref(false);
+const exportingAuditLogs = ref(false);
+const purgingAuditLogs = ref(false);
+const auditLogsFeedback = ref('');
+const auditCleanupFeedback = ref('');
+const auditFilters = reactive<{
+  action: string;
+  entityType: string;
+  entityId: string;
+  actorMemberId: string;
+  from: string;
+  to: string;
+  limit: number;
+}>({
+  action: '',
+  entityType: '',
+  entityId: '',
+  actorMemberId: '',
+  from: '',
+  to: '',
+  limit: 100
+});
+const auditCleanupDays = ref(180);
 
 const replyInputs = reactive<Record<number, string>>({});
 const statusDrafts = reactive<Record<number, Ticket['status']>>({});
@@ -430,6 +469,7 @@ async function afterLoginLoad(): Promise<void> {
     dashboardTab.value = 'members';
     await loadMembers();
     await loadAdminGroups();
+    await loadAuditLogs();
   } else if (isItOrAdmin.value) {
     dashboardTab.value = 'itdesk';
   } else {
@@ -460,6 +500,8 @@ function clearSession(): void {
   createGroupName.value = '';
   groupAssignForm.groupId = null;
   groupAssignForm.memberId = null;
+  auditLogs.value = [];
+  auditLogsFeedback.value = '';
   notifications.value = [];
   unreadCount.value = 0;
   notificationsOpen.value = false;
@@ -925,6 +967,132 @@ async function deleteMember(member: Member): Promise<void> {
   }
 }
 
+function formatJsonPreview(raw: string | null): string {
+  if (!raw) return '-';
+  try {
+    const parsed = JSON.parse(raw);
+    return JSON.stringify(parsed, null, 2);
+  } catch {
+    return raw;
+  }
+}
+
+function trimmedText(value: string, max = 140): string {
+  const text = value.trim();
+  if (!text) return '';
+  return text.length <= max ? text : `${text.slice(0, max)}...`;
+}
+
+async function loadAuditLogs(): Promise<void> {
+  if (!isAdmin.value) return;
+  loadingAuditLogs.value = true;
+  auditLogsFeedback.value = '';
+  try {
+    const params = new URLSearchParams();
+    const action = trimmedText(auditFilters.action, 80).toUpperCase();
+    const entityType = trimmedText(auditFilters.entityType, 80).toUpperCase();
+    const entityId = trimmedText(auditFilters.entityId, 40);
+    const actorMemberId = trimmedText(auditFilters.actorMemberId, 40);
+    const from = trimmedText(auditFilters.from, 40);
+    const to = trimmedText(auditFilters.to, 40);
+    const safeLimit = Math.min(Math.max(Number(auditFilters.limit) || 100, 1), 500);
+
+    if (action) params.set('action', action);
+    if (entityType) params.set('entityType', entityType);
+    if (entityId) params.set('entityId', entityId);
+    if (actorMemberId) params.set('actorMemberId', actorMemberId);
+    if (from) params.set('from', from);
+    if (to) params.set('to', to);
+    params.set('limit', String(safeLimit));
+
+    const query = params.toString();
+    const url = query ? `/api/admin/audit-logs?${query}` : '/api/admin/audit-logs';
+    auditLogs.value = await requestJson<AuditLogItem[]>(url, { headers: authHeaders() }, '讀取操作紀錄失敗');
+  } catch (e) {
+    auditLogsFeedback.value = e instanceof Error ? e.message : '讀取操作紀錄失敗';
+  } finally {
+    loadingAuditLogs.value = false;
+  }
+}
+
+async function exportAuditLogsCsv(): Promise<void> {
+  if (!isAdmin.value) return;
+  exportingAuditLogs.value = true;
+  auditLogsFeedback.value = '';
+  try {
+    const params = new URLSearchParams();
+    const action = trimmedText(auditFilters.action, 80).toUpperCase();
+    const entityType = trimmedText(auditFilters.entityType, 80).toUpperCase();
+    const entityId = trimmedText(auditFilters.entityId, 40);
+    const actorMemberId = trimmedText(auditFilters.actorMemberId, 40);
+    const from = trimmedText(auditFilters.from, 40);
+    const to = trimmedText(auditFilters.to, 40);
+    const safeLimit = Math.min(Math.max(Number(auditFilters.limit) || 500, 1), 500);
+
+    if (action) params.set('action', action);
+    if (entityType) params.set('entityType', entityType);
+    if (entityId) params.set('entityId', entityId);
+    if (actorMemberId) params.set('actorMemberId', actorMemberId);
+    if (from) params.set('from', from);
+    if (to) params.set('to', to);
+    params.set('limit', String(safeLimit));
+
+    const query = params.toString();
+    const url = query ? `/api/admin/audit-logs/export.csv?${query}` : '/api/admin/audit-logs/export.csv';
+    const response = await fetch(url, { headers: authHeaders() });
+    if (!response.ok) {
+      let parsed: unknown = null;
+      try {
+        parsed = await response.json();
+      } catch {
+        // ignore
+      }
+      throw new Error(parseErrorMessage('匯出 CSV 失敗', parsed));
+    }
+
+    const blob = await response.blob();
+    const disposition = response.headers.get('Content-Disposition') ?? '';
+    const matched = disposition.match(/filename="([^"]+)"/i);
+    const filename = matched?.[1] ?? 'audit-logs.csv';
+    const objectUrl = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = objectUrl;
+    anchor.download = filename;
+    anchor.click();
+    URL.revokeObjectURL(objectUrl);
+  } catch (e) {
+    auditLogsFeedback.value = e instanceof Error ? e.message : '匯出 CSV 失敗';
+  } finally {
+    exportingAuditLogs.value = false;
+  }
+}
+
+async function purgeAuditLogs(): Promise<void> {
+  if (!isAdmin.value) return;
+  purgingAuditLogs.value = true;
+  auditCleanupFeedback.value = '';
+  try {
+    const safeDays = Math.min(Math.max(Number(auditCleanupDays.value) || 180, 1), 3650);
+    const response = await requestJson<{
+      configuredRetentionDays: number;
+      requestedDays: number | null;
+      cutoff: string;
+      candidateCount: number;
+      deletedCount: number;
+    }>(
+      `/api/admin/audit-logs/cleanup?days=${safeDays}`,
+      { method: 'POST', headers: authHeaders() },
+      '清理操作紀錄失敗'
+    );
+    auditCleanupFeedback.value = `清理完成：候選 ${response.candidateCount} 筆，刪除 ${response.deletedCount} 筆（cutoff: ${new Date(response.cutoff).toLocaleString()}）`;
+    await loadAuditLogs();
+  } catch (e) {
+    auditCleanupFeedback.value = e instanceof Error ? e.message : '清理操作紀錄失敗';
+  } finally {
+    purgingAuditLogs.value = false;
+  }
+}
+
 onMounted(async () => {
   await restoreSession();
 });
@@ -1022,7 +1190,13 @@ onBeforeUnmount(() => {
       <section class="tabs">
         <button :class="{ active: dashboardTab === 'helpdesk' }" @click="dashboardTab = 'helpdesk'">提交工單</button>
         <button v-if="isItOrAdmin" :class="{ active: dashboardTab === 'itdesk' }" @click="dashboardTab = 'itdesk'">IT 工單處理</button>
-        <button v-if="isAdmin" :class="{ active: dashboardTab === 'members' }" @click="dashboardTab = 'members'; loadMembers(); loadAdminGroups()">成員管理</button>
+        <button
+          v-if="isAdmin"
+          :class="{ active: dashboardTab === 'members' }"
+          @click="dashboardTab = 'members'; loadMembers(); loadAdminGroups(); loadAuditLogs()"
+        >
+          成員管理
+        </button>
       </section>
 
       <section v-if="dashboardTab === 'helpdesk'" class="panel">
@@ -1293,6 +1467,87 @@ onBeforeUnmount(() => {
                   </div>
                 </li>
               </ul>
+            </li>
+          </ul>
+        </div>
+
+        <div class="audit-admin">
+          <div class="audit-head">
+            <h3>操作紀錄（Audit Log）</h3>
+            <div class="row">
+              <button type="button" @click="loadAuditLogs">重新整理</button>
+              <button type="button" :disabled="exportingAuditLogs" @click="exportAuditLogsCsv">
+                {{ exportingAuditLogs ? '匯出中...' : '匯出 CSV' }}
+              </button>
+            </div>
+          </div>
+          <p class="subtitle">僅限 ADMIN 查詢。可依動作、實體、時間與操作者過濾。</p>
+          <p v-if="auditLogsFeedback" class="feedback error">{{ auditLogsFeedback }}</p>
+          <p v-if="auditCleanupFeedback" class="feedback">{{ auditCleanupFeedback }}</p>
+
+          <div class="row">
+            <label>清理幾天前的紀錄
+              <input v-model.number="auditCleanupDays" type="number" min="1" max="3650" />
+            </label>
+            <button type="button" class="danger" :disabled="purgingAuditLogs" @click="purgeAuditLogs">
+              {{ purgingAuditLogs ? '清理中...' : '執行清理' }}
+            </button>
+          </div>
+
+          <div class="audit-filters">
+            <label>動作（action）
+              <input v-model="auditFilters.action" placeholder="例如 TICKET_STATUS_UPDATED" />
+            </label>
+            <label>實體類型（entityType）
+              <input v-model="auditFilters.entityType" placeholder="例如 TICKET / GROUP" />
+            </label>
+            <label>實體 ID（entityId）
+              <input v-model="auditFilters.entityId" placeholder="例如 123" />
+            </label>
+            <label>操作者 ID（actorMemberId）
+              <input v-model="auditFilters.actorMemberId" placeholder="例如 5" />
+            </label>
+            <label>起始時間（from）
+              <input v-model="auditFilters.from" placeholder="2026-02-13T00:00:00Z" />
+            </label>
+            <label>結束時間（to）
+              <input v-model="auditFilters.to" placeholder="2026-02-13T23:59:59Z" />
+            </label>
+            <label>筆數上限（1-500）
+              <input v-model.number="auditFilters.limit" type="number" min="1" max="500" />
+            </label>
+            <button type="button" @click="loadAuditLogs">查詢</button>
+          </div>
+
+          <p v-if="loadingAuditLogs">讀取操作紀錄中...</p>
+          <p v-else-if="!auditLogs.length">目前沒有符合條件的操作紀錄</p>
+          <ul v-else class="simple-list audit-log-list">
+            <li v-for="log in auditLogs" :key="log.id" class="audit-log-card">
+              <div class="audit-log-title">
+                <strong>#{{ log.id }} {{ log.action }}</strong>
+                <small>{{ new Date(log.createdAt).toLocaleString() }}</small>
+              </div>
+              <small>
+                {{ log.actorRole }} {{ log.actorName }} ({{ log.actorEmployeeId }})
+                · entity: {{ log.entityType }} #{{ log.entityId ?? '-' }}
+              </small>
+              <details>
+                <summary>前後資料與 metadata</summary>
+                <div class="audit-log-json-grid">
+                  <div>
+                    <h4>Before</h4>
+                    <pre>{{ formatJsonPreview(log.beforeJson) }}</pre>
+                  </div>
+                  <div>
+                    <h4>After</h4>
+                    <pre>{{ formatJsonPreview(log.afterJson) }}</pre>
+                  </div>
+                  <div>
+                    <h4>Metadata</h4>
+                    <pre>{{ formatJsonPreview(log.metadataJson) }}</pre>
+                  </div>
+                </div>
+              </details>
             </li>
           </ul>
         </div>
