@@ -1,5 +1,6 @@
 package com.example.demo.helpdesk;
 
+import com.example.demo.group.DepartmentGroup;
 import jakarta.persistence.Column;
 import jakarta.persistence.CascadeType;
 import jakarta.persistence.Entity;
@@ -7,6 +8,8 @@ import jakarta.persistence.FetchType;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
+import jakarta.persistence.JoinColumn;
+import jakarta.persistence.ManyToOne;
 import jakarta.persistence.OneToMany;
 import jakarta.persistence.PrePersist;
 import jakarta.persistence.Table;
@@ -44,6 +47,10 @@ public class HelpdeskTicket {
     @Column(nullable = false)
     private HelpdeskTicketStatus status;
 
+    @jakarta.persistence.Enumerated(jakarta.persistence.EnumType.STRING)
+    @Column(nullable = false)
+    private HelpdeskTicketPriority priority;
+
     @Column(nullable = false)
     private boolean deleted;
 
@@ -53,22 +60,43 @@ public class HelpdeskTicket {
     @Column(nullable = false)
     private LocalDateTime createdAt;
 
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "group_id")
+    private DepartmentGroup group;
+
+    @Column(nullable = false)
+    private boolean supervisorApproved;
+
+    @Column
+    private Long supervisorApprovedByMemberId;
+
+    @Column
+    private LocalDateTime supervisorApprovedAt;
+
     @OneToMany(mappedBy = "ticket", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY)
     private List<HelpdeskAttachment> attachments = new ArrayList<>();
 
     @OneToMany(mappedBy = "ticket", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY)
     private Set<HelpdeskTicketMessage> messages = new LinkedHashSet<>();
 
+    @OneToMany(mappedBy = "ticket", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY)
+    private Set<HelpdeskTicketStatusHistory> statusHistories = new LinkedHashSet<>();
+
     protected HelpdeskTicket() {
     }
 
-    public HelpdeskTicket(String name, String email, String subject, String description, Long createdByMemberId) {
+    public HelpdeskTicket(String name, String email, String subject, String description, Long createdByMemberId,
+                          DepartmentGroup group,
+                          HelpdeskTicketPriority priority) {
         this.name = name;
         this.email = email;
         this.subject = subject;
         this.description = description;
         this.createdByMemberId = createdByMemberId;
+        this.group = group;
         this.status = HelpdeskTicketStatus.OPEN;
+        this.priority = priority == null ? HelpdeskTicketPriority.GENERAL : priority;
+        this.supervisorApproved = this.priority == HelpdeskTicketPriority.GENERAL;
     }
 
     @PrePersist
@@ -78,6 +106,12 @@ public class HelpdeskTicket {
         }
         if (status == null) {
             status = HelpdeskTicketStatus.OPEN;
+        }
+        if (priority == null) {
+            priority = HelpdeskTicketPriority.GENERAL;
+        }
+        if (priority == HelpdeskTicketPriority.GENERAL && !supervisorApproved) {
+            supervisorApproved = true;
         }
     }
 
@@ -113,12 +147,32 @@ public class HelpdeskTicket {
         return deleted;
     }
 
+    public HelpdeskTicketPriority getPriority() {
+        return priority;
+    }
+
     public LocalDateTime getDeletedAt() {
         return deletedAt;
     }
 
     public LocalDateTime getCreatedAt() {
         return createdAt;
+    }
+
+    public DepartmentGroup getGroup() {
+        return group;
+    }
+
+    public boolean isSupervisorApproved() {
+        return supervisorApproved;
+    }
+
+    public Long getSupervisorApprovedByMemberId() {
+        return supervisorApprovedByMemberId;
+    }
+
+    public LocalDateTime getSupervisorApprovedAt() {
+        return supervisorApprovedAt;
     }
 
     public List<HelpdeskAttachment> getAttachments() {
@@ -137,15 +191,36 @@ public class HelpdeskTicket {
         messages.add(message);
     }
 
+    public Set<HelpdeskTicketStatusHistory> getStatusHistories() {
+        return statusHistories;
+    }
+
+    public void addStatusHistory(HelpdeskTicketStatusHistory history) {
+        statusHistories.add(history);
+    }
+
     public void setStatus(HelpdeskTicketStatus status) {
         this.status = status;
+        if (status == HelpdeskTicketStatus.DELETED) {
+            deleted = true;
+            if (deletedAt == null) {
+                deletedAt = LocalDateTime.now();
+            }
+        } else {
+            deleted = false;
+            deletedAt = null;
+        }
     }
 
     public void softDelete() {
-        if (!deleted) {
-            deletedAt = LocalDateTime.now();
+        setStatus(HelpdeskTicketStatus.DELETED);
+    }
+
+    public void markSupervisorApproved(Long memberId) {
+        supervisorApproved = true;
+        supervisorApprovedByMemberId = memberId;
+        if (supervisorApprovedAt == null) {
+            supervisorApprovedAt = LocalDateTime.now();
         }
-        deleted = true;
-        status = HelpdeskTicketStatus.DELETED;
     }
 }

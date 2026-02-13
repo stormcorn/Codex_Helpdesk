@@ -185,11 +185,126 @@ button:disabled {
   padding: 12px;
 }
 
+.ticket-card {
+  position: relative;
+  transition: box-shadow 0.18s ease, transform 0.18s ease, background-color 0.18s ease;
+}
+
+.ticket-card::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  border-radius: 12px 0 0 12px;
+  background: #93accc;
+}
+
+.ticket-card:hover {
+  box-shadow: 0 10px 26px rgba(18, 45, 89, 0.14);
+  transform: translateY(-1px);
+}
+
+.ticket-card.expanded {
+  background: #fcfeff;
+}
+
+.ticket-card.new-ticket-highlight {
+  animation: ticketNewPulse 3s ease-out;
+}
+
+.ticket-card.jump-ticket-highlight {
+  animation: ticketJumpGlow 1.6s ease-out;
+}
+
+@keyframes ticketNewPulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(66, 121, 222, 0.45), 0 10px 26px rgba(18, 45, 89, 0.1);
+    transform: translateY(-1px);
+  }
+  40% {
+    box-shadow: 0 0 0 10px rgba(66, 121, 222, 0), 0 14px 32px rgba(26, 64, 122, 0.18);
+    transform: translateY(-2px);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(66, 121, 222, 0), 0 10px 26px rgba(18, 45, 89, 0.14);
+    transform: translateY(0);
+  }
+}
+
+@keyframes ticketJumpGlow {
+  0% {
+    box-shadow: 0 0 0 0 rgba(255, 176, 59, 0.5), 0 10px 26px rgba(18, 45, 89, 0.14);
+  }
+  35% {
+    box-shadow: 0 0 0 12px rgba(255, 176, 59, 0), 0 16px 36px rgba(44, 66, 104, 0.22);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(255, 176, 59, 0), 0 10px 26px rgba(18, 45, 89, 0.14);
+  }
+}
+
+.ticket-card-open::before {
+  background: #1c4e94;
+}
+
+.ticket-card-proceeding::before {
+  background: #186732;
+}
+
+.ticket-card-pending::before {
+  background: #6e4a22;
+}
+
+.ticket-card-closed::before {
+  background: #9a5607;
+}
+
+.ticket-card-deleted::before {
+  background: #9aa3b2;
+}
+
+.ticket-filters {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 8px 12px;
+  margin-bottom: 10px;
+}
+
+.ticket-filters label {
+  display: grid;
+  gap: 4px;
+  color: #4a668e;
+  font-size: 12px;
+}
+
+.ticket-filters input[type='text'],
+.ticket-filters input:not([type]),
+.ticket-filters select {
+  border: 1px solid #d3e0f2;
+  border-radius: 8px;
+  padding: 6px 8px;
+  background: #fff;
+  color: #172847;
+}
+
+.ticket-filters input[type='checkbox'] {
+  width: 16px;
+  height: 16px;
+}
+
+.ticket-filters small {
+  align-self: end;
+  color: #4a668e;
+}
+
 .ticket-head {
   display: flex;
   justify-content: flex-start;
   align-items: center;
   gap: 10px;
+  flex-wrap: wrap;
 }
 
 .ticket-toggle {
@@ -217,6 +332,98 @@ button:disabled {
   color: #4a668e;
 }
 
+.ticket-meta {
+  color: #4a668e;
+  white-space: nowrap;
+}
+
+.deleted-meta {
+  color: #7f8897;
+}
+
+.deleted-title {
+  color: #8b93a0;
+  font-weight: 700;
+  display: inline-block;
+  position: relative;
+  text-decoration: line-through;
+  text-decoration-thickness: 1.5px;
+  text-decoration-color: #9aa3b2;
+  text-decoration-skip-ink: none;
+}
+
+.deleted-title::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 52%;
+  height: 2px;
+  background: #9aa3b2;
+  pointer-events: none;
+}
+
+.deleted-badge {
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 700;
+  background: #eef1f5;
+  color: #616b79;
+  border: 1px solid #d8dde6;
+  white-space: nowrap;
+}
+
+.priority-tag {
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.priority-general {
+  background: #e8eef7;
+  color: #3f5678;
+}
+
+.priority-urgent {
+  background: #ffe4d6;
+  color: #9a3f1a;
+}
+
+.approval-tag {
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.approval-tag.pending {
+  background: #fff1d8;
+  color: #8a5a1a;
+}
+
+.approval-tag.approved {
+  background: #e0f2df;
+  color: #1f6b34;
+}
+
+.supervisor-approve-btn {
+  border-radius: 8px;
+  border: 1px solid #d9b06c;
+  background: #fff7e8;
+  color: #8b5a1c;
+  font-weight: 700;
+  padding: 4px 10px;
+  line-height: 1.1;
+}
+
+.supervisor-approve-btn:disabled {
+  opacity: 0.6;
+}
+
 .status-tag {
   border-radius: 999px;
   padding: 4px 8px;
@@ -224,13 +431,13 @@ button:disabled {
   font-weight: 700;
 }
 
-.status-button {
+.status-select {
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 700;
   border: 1px solid transparent;
-  cursor: pointer;
-}
-
-.status-button:disabled {
-  cursor: default;
+  min-width: 120px;
 }
 
 .status-open {
@@ -264,13 +471,45 @@ button:disabled {
   border-top: 1px dashed #c9d9ef;
 }
 
+.status-history-box {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px dashed #c9d9ef;
+}
+
+.status-history-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .ticket-content {
   margin-top: 8px;
 }
 
-.deleted {
-  text-decoration: line-through;
-  opacity: 0.72;
+.ticket-expand-enter-active,
+.ticket-expand-leave-active {
+  overflow: hidden;
+  transition: max-height 0.35s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.25s ease, transform 0.25s ease;
+}
+
+.ticket-expand-enter-from,
+.ticket-expand-leave-to {
+  max-height: 0;
+  opacity: 0;
+  transform: translateY(-6px);
+}
+
+.ticket-expand-enter-to,
+.ticket-expand-leave-from {
+  max-height: 1200px;
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.deleted-content {
+  color: #7f8897;
 }
 
 .it-actions {
@@ -289,6 +528,44 @@ button:disabled {
   border-bottom: 1px solid #dbe6f7;
   padding: 8px;
   text-align: left;
+}
+
+.group-admin {
+  margin-top: 16px;
+  border-top: 1px dashed #c9d9ef;
+  padding-top: 12px;
+}
+
+.group-list {
+  margin-top: 10px;
+}
+
+.group-card {
+  border: 1px solid #d8e5f7;
+  border-radius: 10px;
+  background: #f9fcff;
+  padding: 10px;
+}
+
+.group-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.group-member-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.group-supervisor-chip {
+  margin-left: 6px;
+  color: #1f6b34;
 }
 
 .link-button {

@@ -1,74 +1,200 @@
-# Fullstack Starter (Vue + TypeScript + Spring Boot + PostgreSQL)
+# Helpdesk 系統（Vue + TypeScript + Spring Boot + PostgreSQL）
+
+## 專案簡介
+本專案為企業內部 Helpdesk 工單系統，支援帳號管理、工單協作、通知中心與群組主管流程。
+
+核心能力：
+- 會員註冊 / 登入（`ADMIN` / `IT` / `USER`）
+- 工單建立、附件上傳、回覆、狀態管理、軟刪除
+- 工單優先層級（`GENERAL` / `URGENT`）
+- 部門群組管理（Admin 建立群組、指派成員、設定群組主管）
+- 急件主管確認（由該群組主管確認，不是 ADMIN 角色本身）
+- 工單狀態歷程
+- 通知中心（跳轉、自動展開、高亮）
+- 工單篩選/搜尋/排序
+
+技術棧：
+- 前端：Vue 3 + TypeScript + Vite + Nginx
+- 後端：Java 17 + Spring Boot + Spring Data JPA
+- 資料庫：PostgreSQL 16
+- 部署：Docker Compose
+
+## 角色與權限
+- `USER`
+  - 提交工單、查看工單
+  - 刪除自己建立的工單（軟刪除）
+- `IT`
+  - 查看工單、回覆工單、變更工單狀態、刪除工單
+- `ADMIN`
+  - 擁有 IT 能力
+  - 成員管理（指派 `USER` / `IT`、刪除非管理員）
+  - 群組管理（建立群組、加入/移出成員、指派群組主管）
+
+注意：
+- 急件「主管確認」權限是「該工單所屬群組的主管」，不是 `ADMIN` 全域權限。
+
+## 主要功能
+### 1. 工單管理
+- 建立工單欄位：姓名、Email、所屬群組、主旨、優先層級、問題描述、附件
+- 狀態：`OPEN` / `PROCEEDING` / `PENDING` / `CLOSED` / `DELETED`
+- IT/ADMIN 可更新狀態（已刪除工單不可變更）
+- 訊息串回覆（IT/ADMIN）
+- 軟刪除（資料保留）
+
+### 2. 優先層級與主管確認
+- `GENERAL`：一般件
+- `URGENT`：急件，需主管確認
+- 急件建立前需滿足：
+  - 提單者必須屬於某個群組
+  - 該群組已設定主管
+- 主管確認 API 會驗證「操作人是否為該工單群組主管」
+
+### 3. 群組主管制（Admin）
+- 建立部門群組
+- 指派成員加入群組
+- 將已加入群組的成員指定為該群組主管（單一主管）
+
+### 4. 通知中心
+- Header 通知 badge
+- 通知可點擊跳轉對應工單
+- 跳轉後自動展開工單，並 `scroll into center`
+- 跳轉卡片短暫發光高亮
+- 新工單自動高亮約 3 秒
+
+### 5. 工單列表體驗
+- 關鍵字搜尋
+- 我的工單
+- 依建立時間排序（新到舊 / 舊到新）
+- 依狀態篩選
+- 展開收合轉場（`max-height + opacity`）
+- 已刪除工單標題與內容視覺區別（含刪除線）
+
+### 6. 工單歷程與附件
+- 狀態歷程（from/to、操作者、時間）
+- 圖片附件可預覽（燈箱）
+- 非圖片附件可下載
+
+## API 重點（摘要）
+### Auth / 成員
+- `POST /api/auth/register`
+- `POST /api/auth/login`
+- `POST /api/auth/logout`
+- `GET /api/auth/me`
+- `GET /api/admin/members`（Admin）
+- `PATCH /api/admin/members/{memberId}/role`（Admin）
+- `DELETE /api/admin/members/{memberId}`（Admin）
+
+### 群組（新）
+- `GET /api/groups/mine`
+- `GET /api/admin/groups`（Admin）
+- `POST /api/admin/groups`（Admin）
+- `PATCH /api/admin/groups/{groupId}/members/{memberId}`（Admin）
+- `DELETE /api/admin/groups/{groupId}/members/{memberId}`（Admin）
+- `PATCH /api/admin/groups/{groupId}/supervisor/{memberId}`（Admin）
+
+### 工單
+- `GET /api/helpdesk/tickets`
+- `POST /api/helpdesk/tickets`
+  - form-data 主要欄位：`name`, `email`, `subject`, `description`, `groupId`, `priority`, `files[]`
+- `PATCH /api/helpdesk/tickets/{ticketId}/status`
+- `PATCH /api/helpdesk/tickets/{ticketId}/delete`
+- `PATCH /api/helpdesk/tickets/{ticketId}/supervisor-approve`
+- `POST /api/helpdesk/tickets/{ticketId}/messages`
+- `GET /api/helpdesk/tickets/{ticketId}/attachments/{attachmentId}/view`
+- `GET /api/helpdesk/tickets/{ticketId}/attachments/{attachmentId}/download`
+
+### 通知
+- `GET /api/notifications`
+- `PATCH /api/notifications/{id}/read`
+- `PATCH /api/notifications/read-all`
 
 ## 專案結構
+- `frontend`：前端應用（Vue + TS）
+- `backend`：後端 API（Spring Boot）
+- `docker-compose.yml`：一鍵啟動前後端與資料庫
 
-- `frontend`: Vue 3 + TypeScript + Vite（容器內使用 Nginx 提供靜態頁面）
-- `backend`: Java 17 + Spring Boot + Spring Data JPA
-- `postgres`: PostgreSQL 16
-
-## 一鍵啟動（Docker Compose）
-
-在 `fullstack` 目錄執行：
+## 快速啟動（Docker Compose）
+在 `fullstack` 目錄：
 
 ```bash
-docker compose up --build
+docker compose up -d --build
 ```
 
 啟動後：
-
 - 前端：`http://localhost:5173`
-- 後端 API：`http://localhost:8080/api/hello`
+- 後端：`http://localhost:8080`
 - PostgreSQL：`localhost:5432`（db: `fullstack`, user: `app`, password: `app`）
 
 停止服務：
-
 ```bash
 docker compose down
 ```
 
-若要連資料一起清除：
-
+移除資料卷：
 ```bash
 docker compose down -v
 ```
 
-## 後端資料設定
-
-`backend/src/main/resources/application.properties` 支援環境變數：
-
-- `SPRING_DATASOURCE_URL`
-- `SPRING_DATASOURCE_USERNAME`
-- `SPRING_DATASOURCE_PASSWORD`
-
-預設值：
-
-- `jdbc:postgresql://localhost:5432/fullstack`
-- `app`
-- `app`
-
 ## 開發模式（不走 Docker）
-
-### 1. 啟動 PostgreSQL（本機或容器）
-
-資料庫資訊需符合上面預設值，或自行設定環境變數。
+### 1. 啟動資料庫
+預設連線（可由環境變數覆蓋）：
+- URL：`jdbc:postgresql://localhost:5432/fullstack`
+- Username：`app`
+- Password：`app`
 
 ### 2. 啟動後端
-
 ```bash
 cd backend
 mvn spring-boot:run
 ```
 
 ### 3. 啟動前端
-
 ```bash
 cd frontend
 npm install
 npm run dev
 ```
 
-## 目前 API
+## 預設管理員
+由環境變數初始化（預設）：
+- Employee ID：`ADMIN001`
+- Name：`System Admin`
+- Email：`admin@example.com`
+- Password：`Admin@12345`
 
-- `GET /api/hello`
-  - 回傳資料表 `greetings` 的第一筆 `message`
-  - 若資料表沒有資料，啟動時會自動初始化為 `Hello from PostgreSQL + Spring Data JPA`
+建議上線前修改：
+- `APP_ADMIN_EMPLOYEE_ID`
+- `APP_ADMIN_NAME`
+- `APP_ADMIN_EMAIL`
+- `APP_ADMIN_PASSWORD`
+
+## 重要環境變數
+- `SPRING_DATASOURCE_URL`
+- `SPRING_DATASOURCE_USERNAME`
+- `SPRING_DATASOURCE_PASSWORD`
+- `HELPDESK_UPLOAD_DIR`
+- `APP_ADMIN_*`
+
+## 操作手冊
+### USER
+1. 登入後先在「提交工單」選擇所屬群組。
+2. 選擇優先層級（一般/急件），填寫主旨與描述後送出。
+3. 在工單列表查看進度、訊息、狀態歷程與通知。
+4. 可刪除自己建立的工單（軟刪除）。
+
+### IT
+1. 進入「IT 工單處理」。
+2. 使用篩選、搜尋、排序快速定位工單。
+3. 可回覆工單、更新狀態、刪除工單。
+
+### 群組主管
+1. 需先被 Admin 指派為某群組主管。
+2. 可對該群組急件執行「主管確認」。
+
+### ADMIN
+1. 可管理成員角色與帳號。
+2. 在成員管理頁可：
+   - 建立群組
+   - 指派成員加入群組
+   - 將群組成員設為主管
+3. 可監控通知與工單整體流量。

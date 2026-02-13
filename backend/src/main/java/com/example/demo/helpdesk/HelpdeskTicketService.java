@@ -2,6 +2,8 @@ package com.example.demo.helpdesk;
 
 import com.example.demo.auth.Member;
 import com.example.demo.auth.MemberRole;
+import com.example.demo.group.DepartmentGroup;
+import com.example.demo.group.DepartmentGroupService;
 import com.example.demo.notification.NotificationService;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -22,6 +24,7 @@ import java.util.UUID;
 
 import static org.springframework.http.HttpStatus.FORBIDDEN;
 import static org.springframework.http.HttpStatus.NOT_FOUND;
+import static org.springframework.http.HttpStatus.BAD_REQUEST;
 
 @Service
 public class HelpdeskTicketService {
@@ -31,6 +34,7 @@ public class HelpdeskTicketService {
     private final HelpdeskTicketRepository repository;
     private final HelpdeskAttachmentRepository attachmentRepository;
     private final HelpdeskTicketMessageRepository messageRepository;
+    private final DepartmentGroupService groupService;
     private final NotificationService notificationService;
     private final Path uploadDir;
 
@@ -38,20 +42,51 @@ public class HelpdeskTicketService {
             HelpdeskTicketRepository repository,
             HelpdeskAttachmentRepository attachmentRepository,
             HelpdeskTicketMessageRepository messageRepository,
+            DepartmentGroupService groupService,
             NotificationService notificationService,
             @Value("${helpdesk.upload-dir:/tmp/helpdesk-uploads}") String uploadDir
     ) {
         this.repository = repository;
         this.attachmentRepository = attachmentRepository;
         this.messageRepository = messageRepository;
+        this.groupService = groupService;
         this.notificationService = notificationService;
         this.uploadDir = Path.of(uploadDir);
     }
 
     @Transactional
-    public HelpdeskTicket createTicket(Member creator, String name, String email, String subject, String description, List<MultipartFile> files) {
-        HelpdeskTicket ticket = new HelpdeskTicket(name.trim(), email.trim(), subject.trim(), description.trim(), creator.getId());
+    public HelpdeskTicket createTicket(
+            Member creator,
+            String name,
+            String email,
+            String subject,
+            String description,
+            Long groupId,
+            HelpdeskTicketPriority priority,
+            List<MultipartFile> files
+    ) {
+        if (groupId == null) {
+            throw new ResponseStatusException(BAD_REQUEST, "Group is required");
+        }
+        DepartmentGroup group = groupService.requireGroup(groupId);
+        if (!groupService.isMemberInGroup(groupId, creator.getId())) {
+            throw new ResponseStatusException(FORBIDDEN, "You are not a member of this group");
+        }
+        if (priority == HelpdeskTicketPriority.URGENT && !groupService.hasSupervisor(groupId)) {
+            throw new ResponseStatusException(BAD_REQUEST, "Urgent tickets require a supervisor in the group");
+        }
+
+        HelpdeskTicket ticket = new HelpdeskTicket(
+                name.trim(),
+                email.trim(),
+                subject.trim(),
+                description.trim(),
+                creator.getId(),
+                group,
+                priority
+        );
         HelpdeskTicket savedTicket = repository.save(ticket);
+        appendStatusHistory(savedTicket, null, savedTicket.getStatus(), creator);
 
         try {
             Files.createDirectories(uploadDir);
@@ -119,7 +154,11 @@ public class HelpdeskTicketService {
     public HelpdeskTicket changeStatus(Long ticketId, HelpdeskTicketStatus status) {
         HelpdeskTicket ticket = repository.findById(ticketId)
                 .orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "Ticket not found"));
+        HelpdeskTicketStatus fromStatus = ticket.getStatus();
         ticket.setStatus(status);
+        if (fromStatus != status) {
+            appendStatusHistory(ticket, fromStatus, status, null);
+        }
         repository.save(ticket);
         return repository.findWithDetailsById(ticketId)
                 .orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "Ticket not found"));
@@ -127,7 +166,16 @@ public class HelpdeskTicketService {
 
     @Transactional
     public HelpdeskTicket changeStatus(Long ticketId, Member actor, HelpdeskTicketStatus status) {
-        HelpdeskTicket updated = changeStatus(ticketId, status);
+        HelpdeskTicket ticket = repository.findById(ticketId)
+                .orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "Ticket not found"));
+        HelpdeskTicketStatus fromStatus = ticket.getStatus();
+        ticket.setStatus(status);
+        if (fromStatus != status) {
+            appendStatusHistory(ticket, fromStatus, status, actor);
+        }
+        repository.save(ticket);
+        HelpdeskTicket updated = repository.findWithDetailsById(ticketId)
+                .orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "Ticket not found"));
         notificationService.notifyTicketStatusChanged(updated, actor, status);
         return updated;
     }
@@ -142,8 +190,30 @@ public class HelpdeskTicketService {
         if (!isOwner && !isPrivileged) {
             throw new ResponseStatusException(FORBIDDEN, "No permission to delete this ticket");
         }
+        HelpdeskTicketStatus fromStatus = ticket.getStatus();
         ticket.softDelete();
+        if (fromStatus != HelpdeskTicketStatus.DELETED) {
+            appendStatusHistory(ticket, fromStatus, HelpdeskTicketStatus.DELETED, actor);
+        }
         repository.save(ticket);
+        return repository.findWithDetailsById(ticketId)
+                .orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "Ticket not found"));
+    }
+
+    @Transactional
+    public HelpdeskTicket approveUrgentTicket(Long ticketId, Member actor) {
+        HelpdeskTicket ticket = repository.findById(ticketId)
+                .orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "Ticket not found"));
+        if (ticket.getPriority() != HelpdeskTicketPriority.URGENT) {
+            throw new ResponseStatusException(FORBIDDEN, "Only urgent tickets require supervisor approval");
+        }
+        if (ticket.getGroup() == null || !groupService.isSupervisor(ticket.getGroup().getId(), actor.getId())) {
+            throw new ResponseStatusException(FORBIDDEN, "Group supervisor only");
+        }
+        if (!ticket.isSupervisorApproved()) {
+            ticket.markSupervisorApproved(actor.getId());
+            repository.save(ticket);
+        }
         return repository.findWithDetailsById(ticketId)
                 .orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "Ticket not found"));
     }
@@ -177,6 +247,34 @@ public class HelpdeskTicketService {
         return messages.stream()
                 .sorted(Comparator.comparing(HelpdeskTicketMessage::getCreatedAt))
                 .toList();
+    }
+
+    public List<HelpdeskTicketStatusHistory> sortStatusHistoriesByCreatedAt(Collection<HelpdeskTicketStatusHistory> histories) {
+        return histories.stream()
+                .sorted(Comparator.comparing(HelpdeskTicketStatusHistory::getCreatedAt))
+                .toList();
+    }
+
+    private void appendStatusHistory(
+            HelpdeskTicket ticket,
+            HelpdeskTicketStatus fromStatus,
+            HelpdeskTicketStatus toStatus,
+            Member actor
+    ) {
+        String employeeId = actor != null ? actor.getEmployeeId() : "SYSTEM";
+        String name = actor != null ? actor.getName() : "System";
+        String role = actor != null ? actor.getRole().name() : "SYSTEM";
+        Long memberId = actor != null ? actor.getId() : null;
+
+        ticket.addStatusHistory(new HelpdeskTicketStatusHistory(
+                ticket,
+                fromStatus,
+                toStatus,
+                memberId,
+                employeeId,
+                name,
+                role
+        ));
     }
 
     public record AttachmentDownload(Path path, String originalFilename, String contentType) {

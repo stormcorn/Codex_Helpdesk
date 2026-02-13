@@ -28,6 +28,40 @@ type TicketMessage = {
   createdAt: string;
 };
 
+type TicketStatusHistory = {
+  id: number;
+  fromStatus: string | null;
+  toStatus: string;
+  changedByMemberId: number | null;
+  changedByEmployeeId: string;
+  changedByName: string;
+  changedByRole: string;
+  createdAt: string;
+};
+
+type TicketPriority = 'GENERAL' | 'URGENT';
+
+type MyGroup = {
+  id: number;
+  name: string;
+  supervisor: boolean;
+};
+
+type AdminGroupMember = {
+  memberId: number;
+  employeeId: string;
+  name: string;
+  role: Role;
+  supervisor: boolean;
+};
+
+type AdminGroup = {
+  id: number;
+  name: string;
+  createdAt: string;
+  members: AdminGroupMember[];
+};
+
 type Ticket = {
   id: number;
   name: string;
@@ -35,12 +69,19 @@ type Ticket = {
   subject: string;
   description: string;
   status: 'OPEN' | 'PROCEEDING' | 'PENDING' | 'CLOSED' | 'DELETED';
+  priority: TicketPriority;
+  supervisorApproved: boolean;
+  supervisorApprovedByMemberId: number | null;
+  supervisorApprovedAt: string | null;
+  groupId: number | null;
+  groupName: string | null;
   createdByMemberId: number | null;
   deleted: boolean;
   deletedAt: string | null;
   createdAt: string;
   attachments: Attachment[];
   messages: TicketMessage[];
+  statusHistories: TicketStatusHistory[];
 };
 
 type NotificationItem = {
@@ -57,8 +98,6 @@ type NotificationListResponse = {
   unreadCount: number;
 };
 
-const STATUS_FLOW: Ticket['status'][] = ['OPEN', 'PROCEEDING', 'PENDING', 'CLOSED'];
-
 const TOKEN_KEY = 'helpdesk_auth_token';
 const MAX_FILE_BYTES = 5 * 1024 * 1024;
 
@@ -74,23 +113,50 @@ const token = ref('');
 const currentMember = ref<Member | null>(null);
 const dashboardTab = ref<'helpdesk' | 'itdesk' | 'members'>('helpdesk');
 
-const ticketForm = reactive({ name: '', email: '', subject: '', description: '' });
+const ticketForm = reactive<{
+  name: string;
+  email: string;
+  subject: string;
+  description: string;
+  priority: TicketPriority;
+  groupId: number | null;
+}>({
+  name: '',
+  email: '',
+  subject: '',
+  description: '',
+  priority: 'GENERAL',
+  groupId: null
+});
 const selectedFiles = ref<File[]>([]);
 const submittingTicket = ref(false);
 const ticketFeedback = ref('');
 const ticketFeedbackType = ref<'success' | 'error' | ''>('');
 const tickets = ref<Ticket[]>([]);
 const loadingTickets = ref(false);
+const ticketKeyword = ref('');
+const onlyMyTickets = ref(false);
+const createdTimeSort = ref<'newest' | 'oldest'>('newest');
+const statusFilter = ref<'ALL' | Ticket['status']>('ALL');
 
 const members = ref<Member[]>([]);
 const loadingMembers = ref(false);
 const membersFeedback = ref('');
+const myGroups = ref<MyGroup[]>([]);
+const adminGroups = ref<AdminGroup[]>([]);
+const loadingGroups = ref(false);
+const groupsFeedback = ref('');
+const createGroupName = ref('');
+const groupAssignForm = reactive<{ groupId: number | null; memberId: number | null }>({ groupId: null, memberId: null });
 
 const replyInputs = reactive<Record<number, string>>({});
 const statusDrafts = reactive<Record<number, Ticket['status']>>({});
 const itActionLoading = reactive<Record<number, boolean>>({});
 const itFeedback = ref('');
 const openTicketIds = reactive<Record<number, boolean>>({});
+const newTicketHighlights = reactive<Record<number, boolean>>({});
+const jumpTicketHighlights = reactive<Record<number, boolean>>({});
+const ticketHighlightTimers = reactive<Record<string, number>>({});
 
 const lightboxOpen = ref(false);
 const lightboxSrc = ref('');
@@ -106,8 +172,29 @@ const isAuthenticated = computed(() => Boolean(token.value));
 const isAdmin = computed(() => currentMember.value?.role === 'ADMIN');
 const isItOrAdmin = computed(() => currentMember.value?.role === 'IT' || currentMember.value?.role === 'ADMIN');
 
+const EDITABLE_STATUSES = ['OPEN', 'PROCEEDING', 'PENDING', 'CLOSED'] as const;
+
+function normalizeStatus(value: unknown): Ticket['status'] {
+  const normalized = String(value ?? '').trim().toUpperCase();
+  if (normalized === 'DELETED') return 'DELETED';
+  if (normalized === 'OPEN') return 'OPEN';
+  if (normalized === 'PROCEEDING') return 'PROCEEDING';
+  if (normalized === 'PENDING') return 'PENDING';
+  if (normalized === 'CLOSED') return 'CLOSED';
+  return 'OPEN';
+}
+
+function normalizePriority(value: unknown): TicketPriority {
+  return String(value ?? '').trim().toUpperCase() === 'URGENT' ? 'URGENT' : 'GENERAL';
+}
+
 function effectiveStatus(ticket: Ticket): Ticket['status'] {
-  return ticket.deleted ? 'DELETED' : ticket.status;
+  if (ticket.deleted || ticket.deletedAt) return 'DELETED';
+  return normalizeStatus(ticket.status);
+}
+
+function isTicketDeleted(ticket: Ticket): boolean {
+  return effectiveStatus(ticket) === 'DELETED';
 }
 
 const ticketStats = computed(() => {
@@ -121,6 +208,40 @@ const ticketStats = computed(() => {
   return { total, open, proceeding, pending, closed, deleted, todayNew };
 });
 
+const filteredTickets = computed(() => {
+  const keyword = ticketKeyword.value.trim().toLowerCase();
+  const memberId = currentMember.value?.id ?? null;
+
+  return [...tickets.value]
+    .filter((ticket) => {
+      if (statusFilter.value !== 'ALL' && effectiveStatus(ticket) !== statusFilter.value) {
+        return false;
+      }
+      if (onlyMyTickets.value && (!memberId || ticket.createdByMemberId !== memberId)) {
+        return false;
+      }
+      if (!keyword) return true;
+
+      const haystack = [
+        String(ticket.id),
+        ticket.subject,
+        ticket.description,
+        ticket.name,
+        ticket.email,
+        ticket.groupName ?? '',
+        ticket.priority,
+        effectiveStatus(ticket)
+      ]
+        .join(' ')
+        .toLowerCase();
+      return haystack.includes(keyword);
+    })
+    .sort((a, b) => {
+      const diff = new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+      return createdTimeSort.value === 'newest' ? diff : -diff;
+    });
+});
+
 function authHeaders(): HeadersInit {
   return { Authorization: `Bearer ${token.value}` };
 }
@@ -131,6 +252,34 @@ function formatSize(bytes: number): string {
 
 function displayStatus(ticket: Ticket): string {
   return effectiveStatus(ticket);
+}
+
+function normalizeTicket(ticket: Ticket): Ticket {
+  const priority = normalizePriority(ticket.priority);
+  return {
+    ...ticket,
+    status: normalizeStatus(ticket.status),
+    priority,
+    supervisorApproved: priority === 'URGENT' ? Boolean(ticket.supervisorApproved) : true,
+    supervisorApprovedByMemberId: ticket.supervisorApprovedByMemberId ?? null,
+    supervisorApprovedAt: ticket.supervisorApprovedAt ?? null,
+    groupId: ticket.groupId ?? null,
+    groupName: ticket.groupName ?? null,
+    statusHistories: Array.isArray(ticket.statusHistories) ? ticket.statusHistories : []
+  };
+}
+
+function isCurrentMemberSupervisorOfGroup(groupId: number | null): boolean {
+  if (!groupId) return false;
+  return myGroups.value.some((g) => g.id === groupId && g.supervisor);
+}
+
+function formatStatusTransition(history: TicketStatusHistory): string {
+  const toStatus = normalizeStatus(history.toStatus);
+  if (!history.fromStatus) {
+    return `初始化為 ${toStatus}`;
+  }
+  return `${normalizeStatus(history.fromStatus)} → ${toStatus}`;
 }
 
 function isToday(isoDateTime: string): boolean {
@@ -273,12 +422,14 @@ async function restoreSession(): Promise<void> {
 }
 
 async function afterLoginLoad(): Promise<void> {
+  await loadMyGroups();
   await loadTickets();
   await loadNotifications();
   startNotificationPolling();
   if (isAdmin.value) {
     dashboardTab.value = 'members';
     await loadMembers();
+    await loadAdminGroups();
   } else if (isItOrAdmin.value) {
     dashboardTab.value = 'itdesk';
   } else {
@@ -298,15 +449,63 @@ async function logout(): Promise<void> {
 
 function clearSession(): void {
   stopNotificationPolling();
+  clearTicketHighlights();
   token.value = '';
   currentMember.value = null;
   localStorage.removeItem(TOKEN_KEY);
   tickets.value = [];
   members.value = [];
+  myGroups.value = [];
+  adminGroups.value = [];
+  createGroupName.value = '';
+  groupAssignForm.groupId = null;
+  groupAssignForm.memberId = null;
   notifications.value = [];
   unreadCount.value = 0;
   notificationsOpen.value = false;
   dashboardTab.value = 'helpdesk';
+}
+
+async function loadMyGroups(): Promise<void> {
+  if (!token.value) return;
+  try {
+    myGroups.value = await requestJson<MyGroup[]>('/api/groups/mine', { headers: authHeaders() }, '讀取群組失敗');
+    if (myGroups.value.length && !ticketForm.groupId) {
+      ticketForm.groupId = myGroups.value[0].id;
+    }
+  } catch {
+    myGroups.value = [];
+  }
+}
+
+function clearTicketHighlights(): void {
+  Object.values(ticketHighlightTimers).forEach((timerId) => window.clearTimeout(timerId));
+  Object.keys(ticketHighlightTimers).forEach((k) => delete ticketHighlightTimers[k]);
+  Object.keys(newTicketHighlights).forEach((k) => delete newTicketHighlights[Number(k)]);
+  Object.keys(jumpTicketHighlights).forEach((k) => delete jumpTicketHighlights[Number(k)]);
+}
+
+function highlightTicket(ticketId: number, kind: 'new' | 'jump', durationMs: number): void {
+  const key = `${kind}-${ticketId}`;
+  const previousTimer = ticketHighlightTimers[key];
+  if (previousTimer) {
+    window.clearTimeout(previousTimer);
+  }
+
+  if (kind === 'new') {
+    newTicketHighlights[ticketId] = true;
+  } else {
+    jumpTicketHighlights[ticketId] = true;
+  }
+
+  ticketHighlightTimers[key] = window.setTimeout(() => {
+    if (kind === 'new') {
+      delete newTicketHighlights[ticketId];
+    } else {
+      delete jumpTicketHighlights[ticketId];
+    }
+    delete ticketHighlightTimers[key];
+  }, durationMs);
 }
 
 function onFilesChanged(event: Event): void {
@@ -318,10 +517,14 @@ async function loadTickets(): Promise<void> {
   loadingTickets.value = true;
   ticketFeedback.value = '';
   try {
+    const previousIds = new Set(tickets.value.map((t) => t.id));
     const data = await requestJson<Ticket[]>('/api/helpdesk/tickets', { headers: authHeaders() }, '讀取工單失敗');
-    tickets.value = data;
-    data.forEach((t) => {
-      statusDrafts[t.id] = t.status;
+    tickets.value = data.map(normalizeTicket);
+    tickets.value.forEach((t) => {
+      if (previousIds.size > 0 && !previousIds.has(t.id)) {
+        highlightTicket(t.id, 'new', 3000);
+      }
+      statusDrafts[t.id] = effectiveStatus(t);
       replyInputs[t.id] = replyInputs[t.id] ?? '';
       if (openTicketIds[t.id] === undefined) {
         openTicketIds[t.id] = false;
@@ -344,6 +547,11 @@ async function submitTicket(): Promise<void> {
     ticketFeedbackType.value = 'error';
     return;
   }
+  if (!ticketForm.groupId) {
+    ticketFeedback.value = '請選擇工單所屬群組。';
+    ticketFeedbackType.value = 'error';
+    return;
+  }
 
   const oversized = selectedFiles.value.find((f) => f.size >= MAX_FILE_BYTES);
   if (oversized) {
@@ -359,6 +567,8 @@ async function submitTicket(): Promise<void> {
     formData.append('email', ticketForm.email);
     formData.append('subject', ticketForm.subject);
     formData.append('description', ticketForm.description);
+    formData.append('groupId', String(ticketForm.groupId));
+    formData.append('priority', ticketForm.priority);
     selectedFiles.value.forEach((f) => formData.append('files', f));
 
     const response = await fetch('/api/helpdesk/tickets', { method: 'POST', headers: authHeaders(), body: formData });
@@ -368,9 +578,10 @@ async function submitTicket(): Promise<void> {
       throw new Error(parseErrorMessage('送出失敗', parsed));
     }
 
-    const created = (await response.json()) as Ticket;
+    const created = normalizeTicket((await response.json()) as Ticket);
     tickets.value = [created, ...tickets.value].slice(0, 20);
-    statusDrafts[created.id] = created.status;
+    highlightTicket(created.id, 'new', 3000);
+    statusDrafts[created.id] = effectiveStatus(created);
     replyInputs[created.id] = '';
     openTicketIds[created.id] = false;
     ticketForm.subject = '';
@@ -378,6 +589,10 @@ async function submitTicket(): Promise<void> {
     selectedFiles.value = [];
     ticketFeedback.value = `工單送出成功 #${created.id}`;
     ticketFeedbackType.value = 'success';
+    ticketForm.priority = 'GENERAL';
+    if (!ticketForm.groupId && myGroups.value.length) {
+      ticketForm.groupId = myGroups.value[0].id;
+    }
   } catch (e) {
     ticketFeedback.value = e instanceof Error ? e.message : '送出失敗';
     ticketFeedbackType.value = 'error';
@@ -387,8 +602,9 @@ async function submitTicket(): Promise<void> {
 }
 
 async function updateTicketStatus(ticket: Ticket): Promise<void> {
-  const status = statusDrafts[ticket.id];
-  if (!status) return;
+  if (isTicketDeleted(ticket)) return;
+  const status = normalizeStatus(statusDrafts[ticket.id]);
+  if (status === 'DELETED' || !EDITABLE_STATUSES.includes(status)) return;
   itActionLoading[ticket.id] = true;
   itFeedback.value = '';
   try {
@@ -409,20 +625,8 @@ async function updateTicketStatus(ticket: Ticket): Promise<void> {
   }
 }
 
-function getNextStatus(status: Ticket['status']): Ticket['status'] {
-  const idx = STATUS_FLOW.indexOf(status);
-  if (idx < 0) return 'OPEN';
-  return STATUS_FLOW[(idx + 1) % STATUS_FLOW.length];
-}
-
-async function quickAdvanceTicketStatus(ticket: Ticket): Promise<void> {
-  if (ticket.deleted) return;
-  statusDrafts[ticket.id] = getNextStatus(ticket.status);
-  await updateTicketStatus(ticket);
-}
-
 async function sendReply(ticket: Ticket): Promise<void> {
-  if (ticket.deleted) return;
+  if (isTicketDeleted(ticket)) return;
   const content = (replyInputs[ticket.id] ?? '').trim();
   if (!content) return;
   itActionLoading[ticket.id] = true;
@@ -447,10 +651,11 @@ async function sendReply(ticket: Ticket): Promise<void> {
 }
 
 function replaceTicket(updated: Ticket): void {
-  tickets.value = tickets.value.map((t) => (t.id === updated.id ? updated : t));
-  statusDrafts[updated.id] = updated.status;
-  if (openTicketIds[updated.id] === undefined) {
-    openTicketIds[updated.id] = false;
+  const normalized = normalizeTicket(updated);
+  tickets.value = tickets.value.map((t) => (t.id === normalized.id ? normalized : t));
+  statusDrafts[normalized.id] = effectiveStatus(normalized);
+  if (openTicketIds[normalized.id] === undefined) {
+    openTicketIds[normalized.id] = false;
   }
 }
 
@@ -523,7 +728,8 @@ async function openNotification(item: NotificationItem): Promise<void> {
     openTicketIds[item.ticketId] = true;
     window.setTimeout(() => {
       const target = document.getElementById(`ticket-${item.ticketId}`);
-      target?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      highlightTicket(item.ticketId!, 'jump', 1600);
+      target?.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }, 80);
   }
   notificationsOpen.value = false;
@@ -535,7 +741,7 @@ function toggleTicket(ticketId: number): void {
 
 function canDeleteTicket(ticket: Ticket): boolean {
   const member = currentMember.value;
-  if (!member || ticket.deleted) return false;
+  if (!member || isTicketDeleted(ticket)) return false;
   if (member.role === 'ADMIN' || member.role === 'IT') return true;
   return ticket.createdByMemberId === member.id;
 }
@@ -559,6 +765,33 @@ async function softDeleteTicket(ticket: Ticket): Promise<void> {
   }
 }
 
+function canSupervisorApprove(ticket: Ticket): boolean {
+  return Boolean(
+    ticket.priority === 'URGENT' &&
+    isCurrentMemberSupervisorOfGroup(ticket.groupId) &&
+    !ticket.supervisorApproved &&
+    !isTicketDeleted(ticket)
+  );
+}
+
+async function supervisorApproveTicket(ticket: Ticket): Promise<void> {
+  if (!canSupervisorApprove(ticket)) return;
+  itFeedback.value = '';
+  itActionLoading[ticket.id] = true;
+  try {
+    const updated = await requestJson<Ticket>(
+      `/api/helpdesk/tickets/${ticket.id}/supervisor-approve`,
+      { method: 'PATCH', headers: authHeaders() },
+      '主管確認失敗'
+    );
+    replaceTicket(updated);
+  } catch (e) {
+    itFeedback.value = e instanceof Error ? e.message : '主管確認失敗';
+  } finally {
+    itActionLoading[ticket.id] = false;
+  }
+}
+
 async function loadMembers(): Promise<void> {
   if (!isAdmin.value) return;
   loadingMembers.value = true;
@@ -569,6 +802,92 @@ async function loadMembers(): Promise<void> {
     membersFeedback.value = e instanceof Error ? e.message : '讀取成員失敗';
   } finally {
     loadingMembers.value = false;
+  }
+}
+
+async function loadAdminGroups(): Promise<void> {
+  if (!isAdmin.value) return;
+  loadingGroups.value = true;
+  groupsFeedback.value = '';
+  try {
+    adminGroups.value = await requestJson<AdminGroup[]>('/api/admin/groups', { headers: authHeaders() }, '讀取群組失敗');
+    if (adminGroups.value.length && !groupAssignForm.groupId) {
+      groupAssignForm.groupId = adminGroups.value[0].id;
+    }
+  } catch (e) {
+    groupsFeedback.value = e instanceof Error ? e.message : '讀取群組失敗';
+  } finally {
+    loadingGroups.value = false;
+  }
+}
+
+async function createAdminGroup(): Promise<void> {
+  if (!isAdmin.value) return;
+  const name = createGroupName.value.trim();
+  if (!name) {
+    groupsFeedback.value = '請輸入群組名稱。';
+    return;
+  }
+  groupsFeedback.value = '';
+  try {
+    await requestJson<AdminGroup>(
+      '/api/admin/groups',
+      { method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() }, body: JSON.stringify({ name }) },
+      '建立群組失敗'
+    );
+    createGroupName.value = '';
+    await loadAdminGroups();
+    await loadMyGroups();
+  } catch (e) {
+    groupsFeedback.value = e instanceof Error ? e.message : '建立群組失敗';
+  }
+}
+
+async function addMemberToGroup(): Promise<void> {
+  if (!isAdmin.value || !groupAssignForm.groupId || !groupAssignForm.memberId) return;
+  groupsFeedback.value = '';
+  try {
+    await requestJson<AdminGroup>(
+      `/api/admin/groups/${groupAssignForm.groupId}/members/${groupAssignForm.memberId}`,
+      { method: 'PATCH', headers: authHeaders() },
+      '加入群組失敗'
+    );
+    await loadAdminGroups();
+    await loadMyGroups();
+  } catch (e) {
+    groupsFeedback.value = e instanceof Error ? e.message : '加入群組失敗';
+  }
+}
+
+async function removeMemberFromGroup(groupId: number, memberId: number): Promise<void> {
+  if (!isAdmin.value) return;
+  groupsFeedback.value = '';
+  try {
+    await requestJson<AdminGroup>(
+      `/api/admin/groups/${groupId}/members/${memberId}`,
+      { method: 'DELETE', headers: authHeaders() },
+      '移出群組失敗'
+    );
+    await loadAdminGroups();
+    await loadMyGroups();
+  } catch (e) {
+    groupsFeedback.value = e instanceof Error ? e.message : '移出群組失敗';
+  }
+}
+
+async function setGroupSupervisor(groupId: number, memberId: number): Promise<void> {
+  if (!isAdmin.value) return;
+  groupsFeedback.value = '';
+  try {
+    await requestJson<AdminGroup>(
+      `/api/admin/groups/${groupId}/supervisor/${memberId}`,
+      { method: 'PATCH', headers: authHeaders() },
+      '設定主管失敗'
+    );
+    await loadAdminGroups();
+    await loadMyGroups();
+  } catch (e) {
+    groupsFeedback.value = e instanceof Error ? e.message : '設定主管失敗';
   }
 }
 
@@ -612,6 +931,7 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   stopNotificationPolling();
+  clearTicketHighlights();
 });
 </script>
 
@@ -702,7 +1022,7 @@ onBeforeUnmount(() => {
       <section class="tabs">
         <button :class="{ active: dashboardTab === 'helpdesk' }" @click="dashboardTab = 'helpdesk'">提交工單</button>
         <button v-if="isItOrAdmin" :class="{ active: dashboardTab === 'itdesk' }" @click="dashboardTab = 'itdesk'">IT 工單處理</button>
-        <button v-if="isAdmin" :class="{ active: dashboardTab === 'members' }" @click="dashboardTab = 'members'; loadMembers()">成員管理</button>
+        <button v-if="isAdmin" :class="{ active: dashboardTab === 'members' }" @click="dashboardTab = 'members'; loadMembers(); loadAdminGroups()">成員管理</button>
       </section>
 
       <section v-if="dashboardTab === 'helpdesk'" class="panel">
@@ -710,7 +1030,19 @@ onBeforeUnmount(() => {
         <form class="form-grid" @submit.prevent="submitTicket">
           <label>姓名<input v-model="ticketForm.name" required /></label>
           <label>Email<input v-model="ticketForm.email" type="email" required /></label>
+          <label>所屬群組
+            <select v-model="ticketForm.groupId" required>
+              <option :value="null" disabled>請選擇群組</option>
+              <option v-for="g in myGroups" :key="g.id" :value="g.id">{{ g.name }}</option>
+            </select>
+          </label>
           <label>主旨<input v-model="ticketForm.subject" required /></label>
+          <label>優先層級
+            <select v-model="ticketForm.priority">
+              <option value="GENERAL">一般</option>
+              <option value="URGENT">急件（需主管確認）</option>
+            </select>
+          </label>
           <label>問題描述<textarea v-model="ticketForm.description" rows="5" required /></label>
           <label>附件（可多檔，每檔 < 5MB）<input type="file" multiple @change="onFilesChanged" /></label>
           <ul v-if="selectedFiles.length" class="simple-list">
@@ -734,69 +1066,156 @@ onBeforeUnmount(() => {
             <span class="stat-chip status-deleted">DELETED <strong>{{ ticketStats.deleted }}</strong></span>
           </div>
         </div>
+        <div class="ticket-filters">
+          <label>
+            關鍵字搜尋
+            <input v-model="ticketKeyword" placeholder="工單編號 / 主旨 / 內容 / 建立人 / Email" />
+          </label>
+          <label>
+            我的工單
+            <input v-model="onlyMyTickets" type="checkbox" />
+          </label>
+          <label>
+            依建立時間排序
+            <select v-model="createdTimeSort">
+              <option value="newest">新到舊</option>
+              <option value="oldest">舊到新</option>
+            </select>
+          </label>
+          <label>
+            依狀態篩選
+            <select v-model="statusFilter">
+              <option value="ALL">全部</option>
+              <option value="OPEN">OPEN</option>
+              <option value="PROCEEDING">PROCEEDING</option>
+              <option value="PENDING">PENDING</option>
+              <option value="CLOSED">CLOSED</option>
+              <option value="DELETED">DELETED</option>
+            </select>
+          </label>
+          <small>顯示 {{ filteredTickets.length }} / {{ tickets.length }} 筆</small>
+        </div>
         <p v-if="loadingTickets">讀取中...</p>
+        <p v-else-if="!filteredTickets.length">沒有符合條件的工單</p>
         <ul v-else class="ticket-list">
-          <li v-for="ticket in tickets" :id="`ticket-${ticket.id}`" :key="ticket.id">
+          <li
+            v-for="ticket in filteredTickets"
+            :id="`ticket-${ticket.id}`"
+            :key="ticket.id"
+            :class="[
+              'ticket-card',
+              `ticket-card-${effectiveStatus(ticket).toLowerCase()}`,
+              {
+                expanded: openTicketIds[ticket.id],
+                'new-ticket-highlight': newTicketHighlights[ticket.id],
+                'jump-ticket-highlight': jumpTicketHighlights[ticket.id]
+              }
+            ]"
+          >
             <div class="ticket-head">
               <button class="ticket-toggle" type="button" @click="toggleTicket(ticket.id)">
-                <strong :class="{ deleted: ticket.deleted }">#{{ ticket.id }} {{ ticket.subject }}</strong>
+                <strong :class="{ 'deleted-title': isTicketDeleted(ticket) }">#{{ ticket.id }} {{ ticket.subject }}</strong>
                 <small>{{ openTicketIds[ticket.id] ? '收合' : '展開' }}</small>
+              </button>
+              <small :class="['ticket-meta', { 'deleted-meta': isTicketDeleted(ticket) }]">
+                {{ ticket.name }} · {{ new Date(ticket.createdAt).toLocaleString() }}
+                <template v-if="ticket.groupName"> · 群組 {{ ticket.groupName }}</template>
+              </small>
+              <span :class="['priority-tag', `priority-${ticket.priority.toLowerCase()}`]">
+                {{ ticket.priority === 'URGENT' ? '急件' : '一般' }}
+              </span>
+              <span
+                v-if="ticket.priority === 'URGENT'"
+                :class="['approval-tag', ticket.supervisorApproved ? 'approved' : 'pending']"
+              >
+                {{ ticket.supervisorApproved ? '主管已確認' : '需主管確認' }}
+              </span>
+              <span v-if="isTicketDeleted(ticket)" class="deleted-badge" aria-label="已刪除工單">🗑 已刪除</span>
+              <button
+                v-if="canSupervisorApprove(ticket)"
+                class="supervisor-approve-btn"
+                type="button"
+                :disabled="itActionLoading[ticket.id]"
+                @click="supervisorApproveTicket(ticket)"
+              >
+                主管確認
               </button>
               <button
                 v-if="canDeleteTicket(ticket)"
                 class="danger ticket-delete-btn"
                 type="button"
-                :disabled="itActionLoading[ticket.id] || ticket.deleted"
+                :disabled="itActionLoading[ticket.id] || isTicketDeleted(ticket)"
                 @click="softDeleteTicket(ticket)"
               >
-                {{ ticket.deleted ? '已刪除' : '刪除' }}
+                {{ isTicketDeleted(ticket) ? '已刪除' : '刪除' }}
               </button>
-              <small v-if="isItOrAdmin" class="status-hint">點擊狀態標籤可快速切換</small>
-              <button
-                v-if="isItOrAdmin"
-                :class="['status-tag', 'status-button', `status-${effectiveStatus(ticket).toLowerCase()}`]"
-                :disabled="itActionLoading[ticket.id] || ticket.deleted"
-                :title="`點擊切換狀態（下一步：${getNextStatus(ticket.status)}）`"
-                type="button"
-                @click="quickAdvanceTicketStatus(ticket)"
+              <small v-if="isItOrAdmin" class="status-hint">狀態</small>
+              <select
+                v-if="isItOrAdmin && !isTicketDeleted(ticket)"
+                :class="['status-select', `status-${effectiveStatus(ticket).toLowerCase()}`]"
+                :disabled="itActionLoading[ticket.id]"
+                v-model="statusDrafts[ticket.id]"
+                @change="updateTicketStatus(ticket)"
               >
-                {{ displayStatus(ticket) }}
-              </button>
+                <option value="OPEN">OPEN</option>
+                <option value="PROCEEDING">PROCEEDING</option>
+                <option value="PENDING">PENDING</option>
+                <option value="CLOSED">CLOSED</option>
+              </select>
               <span v-else :class="['status-tag', `status-${effectiveStatus(ticket).toLowerCase()}`]">{{ displayStatus(ticket) }}</span>
             </div>
-            <div v-if="openTicketIds[ticket.id]" class="ticket-content">
-              <p :class="{ deleted: ticket.deleted }">{{ ticket.description }}</p>
-              <small>{{ ticket.name }} ({{ ticket.email }}) · {{ new Date(ticket.createdAt).toLocaleString() }}</small>
-              <small v-if="ticket.deletedAt"> · 已刪除於 {{ new Date(ticket.deletedAt).toLocaleString() }}</small>
+            <Transition name="ticket-expand">
+              <div v-if="openTicketIds[ticket.id]" class="ticket-content">
+                <p :class="{ 'deleted-content': isTicketDeleted(ticket) }">{{ ticket.description }}</p>
+                <small>{{ ticket.email }}</small>
+                <small v-if="ticket.deletedAt"> · 已刪除於 {{ new Date(ticket.deletedAt).toLocaleString() }}</small>
 
-              <ul v-if="ticket.attachments.length" class="simple-list">
-                <li v-for="att in ticket.attachments" :key="att.id">
-                  <template v-if="isImageAttachment(att)">
-                    <button class="link-button" type="button" @click="openImageLightbox(ticket.id, att)">預覽 {{ att.originalFilename }}</button>
-                  </template>
-                  <template v-else>
-                    <a :href="attachmentDownloadUrl(ticket.id, att.id)" target="_blank" rel="noopener">下載 {{ att.originalFilename }}</a>
-                  </template>
-                </li>
-              </ul>
-
-              <div class="message-box">
-                <h4>工單訊息</h4>
-                <ul class="simple-list">
-                  <li v-for="msg in ticket.messages" :key="msg.id">
-                    <strong>[{{ msg.authorRole }}] {{ msg.authorName }}</strong>：{{ msg.content }}
-                    <small> · {{ new Date(msg.createdAt).toLocaleString() }}</small>
+                <ul v-if="ticket.attachments.length" class="simple-list">
+                  <li v-for="att in ticket.attachments" :key="att.id">
+                    <template v-if="isImageAttachment(att)">
+                      <button class="link-button" type="button" @click="openImageLightbox(ticket.id, att)">預覽 {{ att.originalFilename }}</button>
+                    </template>
+                    <template v-else>
+                      <a :href="attachmentDownloadUrl(ticket.id, att.id)" target="_blank" rel="noopener">下載 {{ att.originalFilename }}</a>
+                    </template>
                   </li>
                 </ul>
-              </div>
 
-              <div v-if="isItOrAdmin" class="it-actions">
-                <div class="row">
-                  <input v-model="replyInputs[ticket.id]" placeholder="輸入回覆訊息" />
-                  <button :disabled="itActionLoading[ticket.id] || ticket.deleted" @click="sendReply(ticket)">送出回覆</button>
+                <div class="message-box">
+                  <h4>工單訊息</h4>
+                  <ul class="simple-list">
+                    <li v-for="msg in ticket.messages" :key="msg.id">
+                      <strong>[{{ msg.authorRole }}] {{ msg.authorName }}</strong>：{{ msg.content }}
+                      <small> · {{ new Date(msg.createdAt).toLocaleString() }}</small>
+                    </li>
+                  </ul>
+                </div>
+
+                <div class="status-history-box">
+                  <h4>狀態歷程</h4>
+                  <ul v-if="ticket.statusHistories.length" class="simple-list status-history-list">
+                    <li v-for="history in ticket.statusHistories" :key="history.id">
+                      <span :class="['status-tag', `status-${normalizeStatus(history.toStatus).toLowerCase()}`]">
+                        {{ normalizeStatus(history.toStatus) }}
+                      </span>
+                      <small>
+                        {{ formatStatusTransition(history) }} ·
+                        {{ history.changedByRole }} {{ history.changedByName }} ({{ history.changedByEmployeeId }}) ·
+                        {{ new Date(history.createdAt).toLocaleString() }}
+                      </small>
+                    </li>
+                  </ul>
+                  <small v-else>尚無狀態變更紀錄</small>
+                </div>
+
+                <div v-if="isItOrAdmin" class="it-actions">
+                  <div class="row">
+                    <input v-model="replyInputs[ticket.id]" placeholder="輸入回覆訊息" />
+                    <button :disabled="itActionLoading[ticket.id] || isTicketDeleted(ticket)" @click="sendReply(ticket)">送出回覆</button>
+                  </div>
                 </div>
               </div>
-            </div>
+            </Transition>
           </li>
         </ul>
         <p v-if="itFeedback" class="feedback error">{{ itFeedback }}</p>
@@ -832,6 +1251,51 @@ onBeforeUnmount(() => {
             </tr>
           </tbody>
         </table>
+
+        <div class="group-admin">
+          <h3>部門群組管理</h3>
+          <p class="subtitle">可建立群組、指派成員加入群組，並將群組成員指定為主管。</p>
+          <p v-if="groupsFeedback" class="feedback error">{{ groupsFeedback }}</p>
+
+          <div class="row">
+            <input v-model="createGroupName" placeholder="新群組名稱" />
+            <button @click="createAdminGroup">建立群組</button>
+          </div>
+
+          <div class="row">
+            <select v-model="groupAssignForm.groupId">
+              <option :value="null" disabled>選擇群組</option>
+              <option v-for="g in adminGroups" :key="g.id" :value="g.id">{{ g.name }}</option>
+            </select>
+            <select v-model="groupAssignForm.memberId">
+              <option :value="null" disabled>選擇成員</option>
+              <option v-for="m in members" :key="m.id" :value="m.id">{{ m.employeeId }} {{ m.name }}</option>
+            </select>
+            <button @click="addMemberToGroup">加入群組</button>
+          </div>
+
+          <p v-if="loadingGroups">讀取群組中...</p>
+          <ul v-else class="simple-list group-list">
+            <li v-for="g in adminGroups" :key="g.id" class="group-card">
+              <div class="group-head">
+                <strong>{{ g.name }}</strong>
+                <small>建立於 {{ new Date(g.createdAt).toLocaleString() }}</small>
+              </div>
+              <ul class="simple-list">
+                <li v-for="gm in g.members" :key="`${g.id}-${gm.memberId}`" class="group-member-row">
+                  <span>
+                    {{ gm.employeeId }} {{ gm.name }} ({{ gm.role }})
+                    <strong v-if="gm.supervisor" class="group-supervisor-chip">主管</strong>
+                  </span>
+                  <div class="row">
+                    <button v-if="!gm.supervisor" @click="setGroupSupervisor(g.id, gm.memberId)">設為主管</button>
+                    <button class="danger" @click="removeMemberFromGroup(g.id, gm.memberId)">移出群組</button>
+                  </div>
+                </li>
+              </ul>
+            </li>
+          </ul>
+        </div>
       </section>
 
       <div v-if="lightboxOpen" class="lightbox" @click.self="closeLightbox">

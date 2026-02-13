@@ -1,5 +1,4 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
-const STATUS_FLOW = ['OPEN', 'PROCEEDING', 'PENDING', 'CLOSED'];
 const TOKEN_KEY = 'helpdesk_auth_token';
 const MAX_FILE_BYTES = 5 * 1024 * 1024;
 const authMode = ref('login');
@@ -11,21 +10,41 @@ const registerForm = reactive({ employeeId: '', name: '', email: '', password: '
 const token = ref('');
 const currentMember = ref(null);
 const dashboardTab = ref('helpdesk');
-const ticketForm = reactive({ name: '', email: '', subject: '', description: '' });
+const ticketForm = reactive({
+    name: '',
+    email: '',
+    subject: '',
+    description: '',
+    priority: 'GENERAL',
+    groupId: null
+});
 const selectedFiles = ref([]);
 const submittingTicket = ref(false);
 const ticketFeedback = ref('');
 const ticketFeedbackType = ref('');
 const tickets = ref([]);
 const loadingTickets = ref(false);
+const ticketKeyword = ref('');
+const onlyMyTickets = ref(false);
+const createdTimeSort = ref('newest');
+const statusFilter = ref('ALL');
 const members = ref([]);
 const loadingMembers = ref(false);
 const membersFeedback = ref('');
+const myGroups = ref([]);
+const adminGroups = ref([]);
+const loadingGroups = ref(false);
+const groupsFeedback = ref('');
+const createGroupName = ref('');
+const groupAssignForm = reactive({ groupId: null, memberId: null });
 const replyInputs = reactive({});
 const statusDrafts = reactive({});
 const itActionLoading = reactive({});
 const itFeedback = ref('');
 const openTicketIds = reactive({});
+const newTicketHighlights = reactive({});
+const jumpTicketHighlights = reactive({});
+const ticketHighlightTimers = reactive({});
 const lightboxOpen = ref(false);
 const lightboxSrc = ref('');
 const lightboxTitle = ref('');
@@ -38,8 +57,31 @@ let notificationTimer = null;
 const isAuthenticated = computed(() => Boolean(token.value));
 const isAdmin = computed(() => currentMember.value?.role === 'ADMIN');
 const isItOrAdmin = computed(() => currentMember.value?.role === 'IT' || currentMember.value?.role === 'ADMIN');
+const EDITABLE_STATUSES = ['OPEN', 'PROCEEDING', 'PENDING', 'CLOSED'];
+function normalizeStatus(value) {
+    const normalized = String(value ?? '').trim().toUpperCase();
+    if (normalized === 'DELETED')
+        return 'DELETED';
+    if (normalized === 'OPEN')
+        return 'OPEN';
+    if (normalized === 'PROCEEDING')
+        return 'PROCEEDING';
+    if (normalized === 'PENDING')
+        return 'PENDING';
+    if (normalized === 'CLOSED')
+        return 'CLOSED';
+    return 'OPEN';
+}
+function normalizePriority(value) {
+    return String(value ?? '').trim().toUpperCase() === 'URGENT' ? 'URGENT' : 'GENERAL';
+}
 function effectiveStatus(ticket) {
-    return ticket.deleted ? 'DELETED' : ticket.status;
+    if (ticket.deleted || ticket.deletedAt)
+        return 'DELETED';
+    return normalizeStatus(ticket.status);
+}
+function isTicketDeleted(ticket) {
+    return effectiveStatus(ticket) === 'DELETED';
 }
 const ticketStats = computed(() => {
     const total = tickets.value.length;
@@ -51,6 +93,38 @@ const ticketStats = computed(() => {
     const todayNew = tickets.value.filter((t) => isToday(t.createdAt)).length;
     return { total, open, proceeding, pending, closed, deleted, todayNew };
 });
+const filteredTickets = computed(() => {
+    const keyword = ticketKeyword.value.trim().toLowerCase();
+    const memberId = currentMember.value?.id ?? null;
+    return [...tickets.value]
+        .filter((ticket) => {
+        if (statusFilter.value !== 'ALL' && effectiveStatus(ticket) !== statusFilter.value) {
+            return false;
+        }
+        if (onlyMyTickets.value && (!memberId || ticket.createdByMemberId !== memberId)) {
+            return false;
+        }
+        if (!keyword)
+            return true;
+        const haystack = [
+            String(ticket.id),
+            ticket.subject,
+            ticket.description,
+            ticket.name,
+            ticket.email,
+            ticket.groupName ?? '',
+            ticket.priority,
+            effectiveStatus(ticket)
+        ]
+            .join(' ')
+            .toLowerCase();
+        return haystack.includes(keyword);
+    })
+        .sort((a, b) => {
+        const diff = new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+        return createdTimeSort.value === 'newest' ? diff : -diff;
+    });
+});
 function authHeaders() {
     return { Authorization: `Bearer ${token.value}` };
 }
@@ -59,6 +133,32 @@ function formatSize(bytes) {
 }
 function displayStatus(ticket) {
     return effectiveStatus(ticket);
+}
+function normalizeTicket(ticket) {
+    const priority = normalizePriority(ticket.priority);
+    return {
+        ...ticket,
+        status: normalizeStatus(ticket.status),
+        priority,
+        supervisorApproved: priority === 'URGENT' ? Boolean(ticket.supervisorApproved) : true,
+        supervisorApprovedByMemberId: ticket.supervisorApprovedByMemberId ?? null,
+        supervisorApprovedAt: ticket.supervisorApprovedAt ?? null,
+        groupId: ticket.groupId ?? null,
+        groupName: ticket.groupName ?? null,
+        statusHistories: Array.isArray(ticket.statusHistories) ? ticket.statusHistories : []
+    };
+}
+function isCurrentMemberSupervisorOfGroup(groupId) {
+    if (!groupId)
+        return false;
+    return myGroups.value.some((g) => g.id === groupId && g.supervisor);
+}
+function formatStatusTransition(history) {
+    const toStatus = normalizeStatus(history.toStatus);
+    if (!history.fromStatus) {
+        return `初始化為 ${toStatus}`;
+    }
+    return `${normalizeStatus(history.fromStatus)} → ${toStatus}`;
 }
 function isToday(isoDateTime) {
     const target = new Date(isoDateTime);
@@ -184,12 +284,14 @@ async function restoreSession() {
     }
 }
 async function afterLoginLoad() {
+    await loadMyGroups();
     await loadTickets();
     await loadNotifications();
     startNotificationPolling();
     if (isAdmin.value) {
         dashboardTab.value = 'members';
         await loadMembers();
+        await loadAdminGroups();
     }
     else if (isItOrAdmin.value) {
         dashboardTab.value = 'itdesk';
@@ -210,15 +312,62 @@ async function logout() {
 }
 function clearSession() {
     stopNotificationPolling();
+    clearTicketHighlights();
     token.value = '';
     currentMember.value = null;
     localStorage.removeItem(TOKEN_KEY);
     tickets.value = [];
     members.value = [];
+    myGroups.value = [];
+    adminGroups.value = [];
+    createGroupName.value = '';
+    groupAssignForm.groupId = null;
+    groupAssignForm.memberId = null;
     notifications.value = [];
     unreadCount.value = 0;
     notificationsOpen.value = false;
     dashboardTab.value = 'helpdesk';
+}
+async function loadMyGroups() {
+    if (!token.value)
+        return;
+    try {
+        myGroups.value = await requestJson('/api/groups/mine', { headers: authHeaders() }, '讀取群組失敗');
+        if (myGroups.value.length && !ticketForm.groupId) {
+            ticketForm.groupId = myGroups.value[0].id;
+        }
+    }
+    catch {
+        myGroups.value = [];
+    }
+}
+function clearTicketHighlights() {
+    Object.values(ticketHighlightTimers).forEach((timerId) => window.clearTimeout(timerId));
+    Object.keys(ticketHighlightTimers).forEach((k) => delete ticketHighlightTimers[k]);
+    Object.keys(newTicketHighlights).forEach((k) => delete newTicketHighlights[Number(k)]);
+    Object.keys(jumpTicketHighlights).forEach((k) => delete jumpTicketHighlights[Number(k)]);
+}
+function highlightTicket(ticketId, kind, durationMs) {
+    const key = `${kind}-${ticketId}`;
+    const previousTimer = ticketHighlightTimers[key];
+    if (previousTimer) {
+        window.clearTimeout(previousTimer);
+    }
+    if (kind === 'new') {
+        newTicketHighlights[ticketId] = true;
+    }
+    else {
+        jumpTicketHighlights[ticketId] = true;
+    }
+    ticketHighlightTimers[key] = window.setTimeout(() => {
+        if (kind === 'new') {
+            delete newTicketHighlights[ticketId];
+        }
+        else {
+            delete jumpTicketHighlights[ticketId];
+        }
+        delete ticketHighlightTimers[key];
+    }, durationMs);
 }
 function onFilesChanged(event) {
     const input = event.target;
@@ -228,10 +377,14 @@ async function loadTickets() {
     loadingTickets.value = true;
     ticketFeedback.value = '';
     try {
+        const previousIds = new Set(tickets.value.map((t) => t.id));
         const data = await requestJson('/api/helpdesk/tickets', { headers: authHeaders() }, '讀取工單失敗');
-        tickets.value = data;
-        data.forEach((t) => {
-            statusDrafts[t.id] = t.status;
+        tickets.value = data.map(normalizeTicket);
+        tickets.value.forEach((t) => {
+            if (previousIds.size > 0 && !previousIds.has(t.id)) {
+                highlightTicket(t.id, 'new', 3000);
+            }
+            statusDrafts[t.id] = effectiveStatus(t);
             replyInputs[t.id] = replyInputs[t.id] ?? '';
             if (openTicketIds[t.id] === undefined) {
                 openTicketIds[t.id] = false;
@@ -254,6 +407,11 @@ async function submitTicket() {
         ticketFeedbackType.value = 'error';
         return;
     }
+    if (!ticketForm.groupId) {
+        ticketFeedback.value = '請選擇工單所屬群組。';
+        ticketFeedbackType.value = 'error';
+        return;
+    }
     const oversized = selectedFiles.value.find((f) => f.size >= MAX_FILE_BYTES);
     if (oversized) {
         ticketFeedback.value = `檔案 ${oversized.name} 超過 5MB 限制。`;
@@ -267,6 +425,8 @@ async function submitTicket() {
         formData.append('email', ticketForm.email);
         formData.append('subject', ticketForm.subject);
         formData.append('description', ticketForm.description);
+        formData.append('groupId', String(ticketForm.groupId));
+        formData.append('priority', ticketForm.priority);
         selectedFiles.value.forEach((f) => formData.append('files', f));
         const response = await fetch('/api/helpdesk/tickets', { method: 'POST', headers: authHeaders(), body: formData });
         if (!response.ok) {
@@ -277,9 +437,10 @@ async function submitTicket() {
             catch { /* ignore */ }
             throw new Error(parseErrorMessage('送出失敗', parsed));
         }
-        const created = (await response.json());
+        const created = normalizeTicket((await response.json()));
         tickets.value = [created, ...tickets.value].slice(0, 20);
-        statusDrafts[created.id] = created.status;
+        highlightTicket(created.id, 'new', 3000);
+        statusDrafts[created.id] = effectiveStatus(created);
         replyInputs[created.id] = '';
         openTicketIds[created.id] = false;
         ticketForm.subject = '';
@@ -287,6 +448,10 @@ async function submitTicket() {
         selectedFiles.value = [];
         ticketFeedback.value = `工單送出成功 #${created.id}`;
         ticketFeedbackType.value = 'success';
+        ticketForm.priority = 'GENERAL';
+        if (!ticketForm.groupId && myGroups.value.length) {
+            ticketForm.groupId = myGroups.value[0].id;
+        }
     }
     catch (e) {
         ticketFeedback.value = e instanceof Error ? e.message : '送出失敗';
@@ -297,8 +462,10 @@ async function submitTicket() {
     }
 }
 async function updateTicketStatus(ticket) {
-    const status = statusDrafts[ticket.id];
-    if (!status)
+    if (isTicketDeleted(ticket))
+        return;
+    const status = normalizeStatus(statusDrafts[ticket.id]);
+    if (status === 'DELETED' || !EDITABLE_STATUSES.includes(status))
         return;
     itActionLoading[ticket.id] = true;
     itFeedback.value = '';
@@ -317,20 +484,8 @@ async function updateTicketStatus(ticket) {
         itActionLoading[ticket.id] = false;
     }
 }
-function getNextStatus(status) {
-    const idx = STATUS_FLOW.indexOf(status);
-    if (idx < 0)
-        return 'OPEN';
-    return STATUS_FLOW[(idx + 1) % STATUS_FLOW.length];
-}
-async function quickAdvanceTicketStatus(ticket) {
-    if (ticket.deleted)
-        return;
-    statusDrafts[ticket.id] = getNextStatus(ticket.status);
-    await updateTicketStatus(ticket);
-}
 async function sendReply(ticket) {
-    if (ticket.deleted)
+    if (isTicketDeleted(ticket))
         return;
     const content = (replyInputs[ticket.id] ?? '').trim();
     if (!content)
@@ -354,10 +509,11 @@ async function sendReply(ticket) {
     }
 }
 function replaceTicket(updated) {
-    tickets.value = tickets.value.map((t) => (t.id === updated.id ? updated : t));
-    statusDrafts[updated.id] = updated.status;
-    if (openTicketIds[updated.id] === undefined) {
-        openTicketIds[updated.id] = false;
+    const normalized = normalizeTicket(updated);
+    tickets.value = tickets.value.map((t) => (t.id === normalized.id ? normalized : t));
+    statusDrafts[normalized.id] = effectiveStatus(normalized);
+    if (openTicketIds[normalized.id] === undefined) {
+        openTicketIds[normalized.id] = false;
     }
 }
 async function loadNotifications(silent = false) {
@@ -427,7 +583,8 @@ async function openNotification(item) {
         openTicketIds[item.ticketId] = true;
         window.setTimeout(() => {
             const target = document.getElementById(`ticket-${item.ticketId}`);
-            target?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            highlightTicket(item.ticketId, 'jump', 1600);
+            target?.scrollIntoView({ behavior: 'smooth', block: 'center' });
         }, 80);
     }
     notificationsOpen.value = false;
@@ -437,7 +594,7 @@ function toggleTicket(ticketId) {
 }
 function canDeleteTicket(ticket) {
     const member = currentMember.value;
-    if (!member || ticket.deleted)
+    if (!member || isTicketDeleted(ticket))
         return false;
     if (member.role === 'ADMIN' || member.role === 'IT')
         return true;
@@ -461,6 +618,28 @@ async function softDeleteTicket(ticket) {
         itActionLoading[ticket.id] = false;
     }
 }
+function canSupervisorApprove(ticket) {
+    return Boolean(ticket.priority === 'URGENT' &&
+        isCurrentMemberSupervisorOfGroup(ticket.groupId) &&
+        !ticket.supervisorApproved &&
+        !isTicketDeleted(ticket));
+}
+async function supervisorApproveTicket(ticket) {
+    if (!canSupervisorApprove(ticket))
+        return;
+    itFeedback.value = '';
+    itActionLoading[ticket.id] = true;
+    try {
+        const updated = await requestJson(`/api/helpdesk/tickets/${ticket.id}/supervisor-approve`, { method: 'PATCH', headers: authHeaders() }, '主管確認失敗');
+        replaceTicket(updated);
+    }
+    catch (e) {
+        itFeedback.value = e instanceof Error ? e.message : '主管確認失敗';
+    }
+    finally {
+        itActionLoading[ticket.id] = false;
+    }
+}
 async function loadMembers() {
     if (!isAdmin.value)
         return;
@@ -474,6 +653,82 @@ async function loadMembers() {
     }
     finally {
         loadingMembers.value = false;
+    }
+}
+async function loadAdminGroups() {
+    if (!isAdmin.value)
+        return;
+    loadingGroups.value = true;
+    groupsFeedback.value = '';
+    try {
+        adminGroups.value = await requestJson('/api/admin/groups', { headers: authHeaders() }, '讀取群組失敗');
+        if (adminGroups.value.length && !groupAssignForm.groupId) {
+            groupAssignForm.groupId = adminGroups.value[0].id;
+        }
+    }
+    catch (e) {
+        groupsFeedback.value = e instanceof Error ? e.message : '讀取群組失敗';
+    }
+    finally {
+        loadingGroups.value = false;
+    }
+}
+async function createAdminGroup() {
+    if (!isAdmin.value)
+        return;
+    const name = createGroupName.value.trim();
+    if (!name) {
+        groupsFeedback.value = '請輸入群組名稱。';
+        return;
+    }
+    groupsFeedback.value = '';
+    try {
+        await requestJson('/api/admin/groups', { method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() }, body: JSON.stringify({ name }) }, '建立群組失敗');
+        createGroupName.value = '';
+        await loadAdminGroups();
+        await loadMyGroups();
+    }
+    catch (e) {
+        groupsFeedback.value = e instanceof Error ? e.message : '建立群組失敗';
+    }
+}
+async function addMemberToGroup() {
+    if (!isAdmin.value || !groupAssignForm.groupId || !groupAssignForm.memberId)
+        return;
+    groupsFeedback.value = '';
+    try {
+        await requestJson(`/api/admin/groups/${groupAssignForm.groupId}/members/${groupAssignForm.memberId}`, { method: 'PATCH', headers: authHeaders() }, '加入群組失敗');
+        await loadAdminGroups();
+        await loadMyGroups();
+    }
+    catch (e) {
+        groupsFeedback.value = e instanceof Error ? e.message : '加入群組失敗';
+    }
+}
+async function removeMemberFromGroup(groupId, memberId) {
+    if (!isAdmin.value)
+        return;
+    groupsFeedback.value = '';
+    try {
+        await requestJson(`/api/admin/groups/${groupId}/members/${memberId}`, { method: 'DELETE', headers: authHeaders() }, '移出群組失敗');
+        await loadAdminGroups();
+        await loadMyGroups();
+    }
+    catch (e) {
+        groupsFeedback.value = e instanceof Error ? e.message : '移出群組失敗';
+    }
+}
+async function setGroupSupervisor(groupId, memberId) {
+    if (!isAdmin.value)
+        return;
+    groupsFeedback.value = '';
+    try {
+        await requestJson(`/api/admin/groups/${groupId}/supervisor/${memberId}`, { method: 'PATCH', headers: authHeaders() }, '設定主管失敗');
+        await loadAdminGroups();
+        await loadMyGroups();
+    }
+    catch (e) {
+        groupsFeedback.value = e instanceof Error ? e.message : '設定主管失敗';
     }
 }
 async function updateMemberRole(member, role) {
@@ -517,6 +772,7 @@ onMounted(async () => {
 });
 onBeforeUnmount(() => {
     stopNotificationPolling();
+    clearTicketHighlights();
 });
 debugger; /* PartiallyEnd: #3632/scriptSetup.vue */
 const __VLS_ctx = {};
@@ -776,6 +1032,7 @@ else {
                         return;
                     __VLS_ctx.dashboardTab = 'members';
                     __VLS_ctx.loadMembers();
+                    __VLS_ctx.loadAdminGroups();
                 } },
             ...{ class: ({ active: __VLS_ctx.dashboardTab === 'members' }) },
         });
@@ -801,10 +1058,36 @@ else {
         });
         (__VLS_ctx.ticketForm.email);
         __VLS_asFunctionalElement(__VLS_intrinsicElements.label, __VLS_intrinsicElements.label)({});
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.select, __VLS_intrinsicElements.select)({
+            value: (__VLS_ctx.ticketForm.groupId),
+            required: true,
+        });
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.option, __VLS_intrinsicElements.option)({
+            value: (null),
+            disabled: true,
+        });
+        for (const [g] of __VLS_getVForSourceType((__VLS_ctx.myGroups))) {
+            __VLS_asFunctionalElement(__VLS_intrinsicElements.option, __VLS_intrinsicElements.option)({
+                key: (g.id),
+                value: (g.id),
+            });
+            (g.name);
+        }
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.label, __VLS_intrinsicElements.label)({});
         __VLS_asFunctionalElement(__VLS_intrinsicElements.input)({
             required: true,
         });
         (__VLS_ctx.ticketForm.subject);
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.label, __VLS_intrinsicElements.label)({});
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.select, __VLS_intrinsicElements.select)({
+            value: (__VLS_ctx.ticketForm.priority),
+        });
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.option, __VLS_intrinsicElements.option)({
+            value: "GENERAL",
+        });
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.option, __VLS_intrinsicElements.option)({
+            value: "URGENT",
+        });
         __VLS_asFunctionalElement(__VLS_intrinsicElements.label, __VLS_intrinsicElements.label)({});
         __VLS_asFunctionalElement(__VLS_intrinsicElements.textarea)({
             value: (__VLS_ctx.ticketForm.description),
@@ -888,17 +1171,77 @@ else {
         });
         __VLS_asFunctionalElement(__VLS_intrinsicElements.strong, __VLS_intrinsicElements.strong)({});
         (__VLS_ctx.ticketStats.deleted);
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
+            ...{ class: "ticket-filters" },
+        });
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.label, __VLS_intrinsicElements.label)({});
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.input)({
+            placeholder: "工單編號 / 主旨 / 內容 / 建立人 / Email",
+        });
+        (__VLS_ctx.ticketKeyword);
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.label, __VLS_intrinsicElements.label)({});
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.input)({
+            type: "checkbox",
+        });
+        (__VLS_ctx.onlyMyTickets);
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.label, __VLS_intrinsicElements.label)({});
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.select, __VLS_intrinsicElements.select)({
+            value: (__VLS_ctx.createdTimeSort),
+        });
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.option, __VLS_intrinsicElements.option)({
+            value: "newest",
+        });
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.option, __VLS_intrinsicElements.option)({
+            value: "oldest",
+        });
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.label, __VLS_intrinsicElements.label)({});
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.select, __VLS_intrinsicElements.select)({
+            value: (__VLS_ctx.statusFilter),
+        });
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.option, __VLS_intrinsicElements.option)({
+            value: "ALL",
+        });
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.option, __VLS_intrinsicElements.option)({
+            value: "OPEN",
+        });
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.option, __VLS_intrinsicElements.option)({
+            value: "PROCEEDING",
+        });
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.option, __VLS_intrinsicElements.option)({
+            value: "PENDING",
+        });
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.option, __VLS_intrinsicElements.option)({
+            value: "CLOSED",
+        });
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.option, __VLS_intrinsicElements.option)({
+            value: "DELETED",
+        });
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.small, __VLS_intrinsicElements.small)({});
+        (__VLS_ctx.filteredTickets.length);
+        (__VLS_ctx.tickets.length);
         if (__VLS_ctx.loadingTickets) {
+            __VLS_asFunctionalElement(__VLS_intrinsicElements.p, __VLS_intrinsicElements.p)({});
+        }
+        else if (!__VLS_ctx.filteredTickets.length) {
             __VLS_asFunctionalElement(__VLS_intrinsicElements.p, __VLS_intrinsicElements.p)({});
         }
         else {
             __VLS_asFunctionalElement(__VLS_intrinsicElements.ul, __VLS_intrinsicElements.ul)({
                 ...{ class: "ticket-list" },
             });
-            for (const [ticket] of __VLS_getVForSourceType((__VLS_ctx.tickets))) {
+            for (const [ticket] of __VLS_getVForSourceType((__VLS_ctx.filteredTickets))) {
                 __VLS_asFunctionalElement(__VLS_intrinsicElements.li, __VLS_intrinsicElements.li)({
                     id: (`ticket-${ticket.id}`),
                     key: (ticket.id),
+                    ...{ class: ([
+                            'ticket-card',
+                            `ticket-card-${__VLS_ctx.effectiveStatus(ticket).toLowerCase()}`,
+                            {
+                                expanded: __VLS_ctx.openTicketIds[ticket.id],
+                                'new-ticket-highlight': __VLS_ctx.newTicketHighlights[ticket.id],
+                                'jump-ticket-highlight': __VLS_ctx.jumpTicketHighlights[ticket.id]
+                            }
+                        ]) },
                 });
                 __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
                     ...{ class: "ticket-head" },
@@ -911,18 +1254,64 @@ else {
                                 return;
                             if (!!(__VLS_ctx.loadingTickets))
                                 return;
+                            if (!!(!__VLS_ctx.filteredTickets.length))
+                                return;
                             __VLS_ctx.toggleTicket(ticket.id);
                         } },
                     ...{ class: "ticket-toggle" },
                     type: "button",
                 });
                 __VLS_asFunctionalElement(__VLS_intrinsicElements.strong, __VLS_intrinsicElements.strong)({
-                    ...{ class: ({ deleted: ticket.deleted }) },
+                    ...{ class: ({ 'deleted-title': __VLS_ctx.isTicketDeleted(ticket) }) },
                 });
                 (ticket.id);
                 (ticket.subject);
                 __VLS_asFunctionalElement(__VLS_intrinsicElements.small, __VLS_intrinsicElements.small)({});
                 (__VLS_ctx.openTicketIds[ticket.id] ? '收合' : '展開');
+                __VLS_asFunctionalElement(__VLS_intrinsicElements.small, __VLS_intrinsicElements.small)({
+                    ...{ class: (['ticket-meta', { 'deleted-meta': __VLS_ctx.isTicketDeleted(ticket) }]) },
+                });
+                (ticket.name);
+                (new Date(ticket.createdAt).toLocaleString());
+                if (ticket.groupName) {
+                    (ticket.groupName);
+                }
+                __VLS_asFunctionalElement(__VLS_intrinsicElements.span, __VLS_intrinsicElements.span)({
+                    ...{ class: (['priority-tag', `priority-${ticket.priority.toLowerCase()}`]) },
+                });
+                (ticket.priority === 'URGENT' ? '急件' : '一般');
+                if (ticket.priority === 'URGENT') {
+                    __VLS_asFunctionalElement(__VLS_intrinsicElements.span, __VLS_intrinsicElements.span)({
+                        ...{ class: (['approval-tag', ticket.supervisorApproved ? 'approved' : 'pending']) },
+                    });
+                    (ticket.supervisorApproved ? '主管已確認' : '需主管確認');
+                }
+                if (__VLS_ctx.isTicketDeleted(ticket)) {
+                    __VLS_asFunctionalElement(__VLS_intrinsicElements.span, __VLS_intrinsicElements.span)({
+                        ...{ class: "deleted-badge" },
+                        'aria-label': "已刪除工單",
+                    });
+                }
+                if (__VLS_ctx.canSupervisorApprove(ticket)) {
+                    __VLS_asFunctionalElement(__VLS_intrinsicElements.button, __VLS_intrinsicElements.button)({
+                        ...{ onClick: (...[$event]) => {
+                                if (!!(!__VLS_ctx.isAuthenticated))
+                                    return;
+                                if (!(__VLS_ctx.dashboardTab === 'itdesk' || __VLS_ctx.dashboardTab === 'helpdesk'))
+                                    return;
+                                if (!!(__VLS_ctx.loadingTickets))
+                                    return;
+                                if (!!(!__VLS_ctx.filteredTickets.length))
+                                    return;
+                                if (!(__VLS_ctx.canSupervisorApprove(ticket)))
+                                    return;
+                                __VLS_ctx.supervisorApproveTicket(ticket);
+                            } },
+                        ...{ class: "supervisor-approve-btn" },
+                        type: "button",
+                        disabled: (__VLS_ctx.itActionLoading[ticket.id]),
+                    });
+                }
                 if (__VLS_ctx.canDeleteTicket(ticket)) {
                     __VLS_asFunctionalElement(__VLS_intrinsicElements.button, __VLS_intrinsicElements.button)({
                         ...{ onClick: (...[$event]) => {
@@ -932,40 +1321,54 @@ else {
                                     return;
                                 if (!!(__VLS_ctx.loadingTickets))
                                     return;
+                                if (!!(!__VLS_ctx.filteredTickets.length))
+                                    return;
                                 if (!(__VLS_ctx.canDeleteTicket(ticket)))
                                     return;
                                 __VLS_ctx.softDeleteTicket(ticket);
                             } },
                         ...{ class: "danger ticket-delete-btn" },
                         type: "button",
-                        disabled: (__VLS_ctx.itActionLoading[ticket.id] || ticket.deleted),
+                        disabled: (__VLS_ctx.itActionLoading[ticket.id] || __VLS_ctx.isTicketDeleted(ticket)),
                     });
-                    (ticket.deleted ? '已刪除' : '刪除');
+                    (__VLS_ctx.isTicketDeleted(ticket) ? '已刪除' : '刪除');
                 }
                 if (__VLS_ctx.isItOrAdmin) {
                     __VLS_asFunctionalElement(__VLS_intrinsicElements.small, __VLS_intrinsicElements.small)({
                         ...{ class: "status-hint" },
                     });
                 }
-                if (__VLS_ctx.isItOrAdmin) {
-                    __VLS_asFunctionalElement(__VLS_intrinsicElements.button, __VLS_intrinsicElements.button)({
-                        ...{ onClick: (...[$event]) => {
+                if (__VLS_ctx.isItOrAdmin && !__VLS_ctx.isTicketDeleted(ticket)) {
+                    __VLS_asFunctionalElement(__VLS_intrinsicElements.select, __VLS_intrinsicElements.select)({
+                        ...{ onChange: (...[$event]) => {
                                 if (!!(!__VLS_ctx.isAuthenticated))
                                     return;
                                 if (!(__VLS_ctx.dashboardTab === 'itdesk' || __VLS_ctx.dashboardTab === 'helpdesk'))
                                     return;
                                 if (!!(__VLS_ctx.loadingTickets))
                                     return;
-                                if (!(__VLS_ctx.isItOrAdmin))
+                                if (!!(!__VLS_ctx.filteredTickets.length))
                                     return;
-                                __VLS_ctx.quickAdvanceTicketStatus(ticket);
+                                if (!(__VLS_ctx.isItOrAdmin && !__VLS_ctx.isTicketDeleted(ticket)))
+                                    return;
+                                __VLS_ctx.updateTicketStatus(ticket);
                             } },
-                        ...{ class: (['status-tag', 'status-button', `status-${__VLS_ctx.effectiveStatus(ticket).toLowerCase()}`]) },
-                        disabled: (__VLS_ctx.itActionLoading[ticket.id] || ticket.deleted),
-                        title: (`點擊切換狀態（下一步：${__VLS_ctx.getNextStatus(ticket.status)}）`),
-                        type: "button",
+                        ...{ class: (['status-select', `status-${__VLS_ctx.effectiveStatus(ticket).toLowerCase()}`]) },
+                        disabled: (__VLS_ctx.itActionLoading[ticket.id]),
+                        value: (__VLS_ctx.statusDrafts[ticket.id]),
                     });
-                    (__VLS_ctx.displayStatus(ticket));
+                    __VLS_asFunctionalElement(__VLS_intrinsicElements.option, __VLS_intrinsicElements.option)({
+                        value: "OPEN",
+                    });
+                    __VLS_asFunctionalElement(__VLS_intrinsicElements.option, __VLS_intrinsicElements.option)({
+                        value: "PROCEEDING",
+                    });
+                    __VLS_asFunctionalElement(__VLS_intrinsicElements.option, __VLS_intrinsicElements.option)({
+                        value: "PENDING",
+                    });
+                    __VLS_asFunctionalElement(__VLS_intrinsicElements.option, __VLS_intrinsicElements.option)({
+                        value: "CLOSED",
+                    });
                 }
                 else {
                     __VLS_asFunctionalElement(__VLS_intrinsicElements.span, __VLS_intrinsicElements.span)({
@@ -973,18 +1376,26 @@ else {
                     });
                     (__VLS_ctx.displayStatus(ticket));
                 }
+                const __VLS_0 = {}.Transition;
+                /** @type {[typeof __VLS_components.Transition, typeof __VLS_components.Transition, ]} */ ;
+                // @ts-ignore
+                const __VLS_1 = __VLS_asFunctionalComponent(__VLS_0, new __VLS_0({
+                    name: "ticket-expand",
+                }));
+                const __VLS_2 = __VLS_1({
+                    name: "ticket-expand",
+                }, ...__VLS_functionalComponentArgsRest(__VLS_1));
+                __VLS_3.slots.default;
                 if (__VLS_ctx.openTicketIds[ticket.id]) {
                     __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
                         ...{ class: "ticket-content" },
                     });
                     __VLS_asFunctionalElement(__VLS_intrinsicElements.p, __VLS_intrinsicElements.p)({
-                        ...{ class: ({ deleted: ticket.deleted }) },
+                        ...{ class: ({ 'deleted-content': __VLS_ctx.isTicketDeleted(ticket) }) },
                     });
                     (ticket.description);
                     __VLS_asFunctionalElement(__VLS_intrinsicElements.small, __VLS_intrinsicElements.small)({});
-                    (ticket.name);
                     (ticket.email);
-                    (new Date(ticket.createdAt).toLocaleString());
                     if (ticket.deletedAt) {
                         __VLS_asFunctionalElement(__VLS_intrinsicElements.small, __VLS_intrinsicElements.small)({});
                         (new Date(ticket.deletedAt).toLocaleString());
@@ -1005,6 +1416,8 @@ else {
                                             if (!(__VLS_ctx.dashboardTab === 'itdesk' || __VLS_ctx.dashboardTab === 'helpdesk'))
                                                 return;
                                             if (!!(__VLS_ctx.loadingTickets))
+                                                return;
+                                            if (!!(!__VLS_ctx.filteredTickets.length))
                                                 return;
                                             if (!(__VLS_ctx.openTicketIds[ticket.id]))
                                                 return;
@@ -1047,6 +1460,33 @@ else {
                         __VLS_asFunctionalElement(__VLS_intrinsicElements.small, __VLS_intrinsicElements.small)({});
                         (new Date(msg.createdAt).toLocaleString());
                     }
+                    __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
+                        ...{ class: "status-history-box" },
+                    });
+                    __VLS_asFunctionalElement(__VLS_intrinsicElements.h4, __VLS_intrinsicElements.h4)({});
+                    if (ticket.statusHistories.length) {
+                        __VLS_asFunctionalElement(__VLS_intrinsicElements.ul, __VLS_intrinsicElements.ul)({
+                            ...{ class: "simple-list status-history-list" },
+                        });
+                        for (const [history] of __VLS_getVForSourceType((ticket.statusHistories))) {
+                            __VLS_asFunctionalElement(__VLS_intrinsicElements.li, __VLS_intrinsicElements.li)({
+                                key: (history.id),
+                            });
+                            __VLS_asFunctionalElement(__VLS_intrinsicElements.span, __VLS_intrinsicElements.span)({
+                                ...{ class: (['status-tag', `status-${__VLS_ctx.normalizeStatus(history.toStatus).toLowerCase()}`]) },
+                            });
+                            (__VLS_ctx.normalizeStatus(history.toStatus));
+                            __VLS_asFunctionalElement(__VLS_intrinsicElements.small, __VLS_intrinsicElements.small)({});
+                            (__VLS_ctx.formatStatusTransition(history));
+                            (history.changedByRole);
+                            (history.changedByName);
+                            (history.changedByEmployeeId);
+                            (new Date(history.createdAt).toLocaleString());
+                        }
+                    }
+                    else {
+                        __VLS_asFunctionalElement(__VLS_intrinsicElements.small, __VLS_intrinsicElements.small)({});
+                    }
                     if (__VLS_ctx.isItOrAdmin) {
                         __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
                             ...{ class: "it-actions" },
@@ -1066,16 +1506,19 @@ else {
                                         return;
                                     if (!!(__VLS_ctx.loadingTickets))
                                         return;
+                                    if (!!(!__VLS_ctx.filteredTickets.length))
+                                        return;
                                     if (!(__VLS_ctx.openTicketIds[ticket.id]))
                                         return;
                                     if (!(__VLS_ctx.isItOrAdmin))
                                         return;
                                     __VLS_ctx.sendReply(ticket);
                                 } },
-                            disabled: (__VLS_ctx.itActionLoading[ticket.id] || ticket.deleted),
+                            disabled: (__VLS_ctx.itActionLoading[ticket.id] || __VLS_ctx.isTicketDeleted(ticket)),
                         });
                     }
                 }
+                var __VLS_3;
             }
         }
         if (__VLS_ctx.itFeedback) {
@@ -1177,6 +1620,133 @@ else {
                 }
             }
         }
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
+            ...{ class: "group-admin" },
+        });
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.h3, __VLS_intrinsicElements.h3)({});
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.p, __VLS_intrinsicElements.p)({
+            ...{ class: "subtitle" },
+        });
+        if (__VLS_ctx.groupsFeedback) {
+            __VLS_asFunctionalElement(__VLS_intrinsicElements.p, __VLS_intrinsicElements.p)({
+                ...{ class: "feedback error" },
+            });
+            (__VLS_ctx.groupsFeedback);
+        }
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
+            ...{ class: "row" },
+        });
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.input)({
+            placeholder: "新群組名稱",
+        });
+        (__VLS_ctx.createGroupName);
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.button, __VLS_intrinsicElements.button)({
+            ...{ onClick: (__VLS_ctx.createAdminGroup) },
+        });
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
+            ...{ class: "row" },
+        });
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.select, __VLS_intrinsicElements.select)({
+            value: (__VLS_ctx.groupAssignForm.groupId),
+        });
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.option, __VLS_intrinsicElements.option)({
+            value: (null),
+            disabled: true,
+        });
+        for (const [g] of __VLS_getVForSourceType((__VLS_ctx.adminGroups))) {
+            __VLS_asFunctionalElement(__VLS_intrinsicElements.option, __VLS_intrinsicElements.option)({
+                key: (g.id),
+                value: (g.id),
+            });
+            (g.name);
+        }
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.select, __VLS_intrinsicElements.select)({
+            value: (__VLS_ctx.groupAssignForm.memberId),
+        });
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.option, __VLS_intrinsicElements.option)({
+            value: (null),
+            disabled: true,
+        });
+        for (const [m] of __VLS_getVForSourceType((__VLS_ctx.members))) {
+            __VLS_asFunctionalElement(__VLS_intrinsicElements.option, __VLS_intrinsicElements.option)({
+                key: (m.id),
+                value: (m.id),
+            });
+            (m.employeeId);
+            (m.name);
+        }
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.button, __VLS_intrinsicElements.button)({
+            ...{ onClick: (__VLS_ctx.addMemberToGroup) },
+        });
+        if (__VLS_ctx.loadingGroups) {
+            __VLS_asFunctionalElement(__VLS_intrinsicElements.p, __VLS_intrinsicElements.p)({});
+        }
+        else {
+            __VLS_asFunctionalElement(__VLS_intrinsicElements.ul, __VLS_intrinsicElements.ul)({
+                ...{ class: "simple-list group-list" },
+            });
+            for (const [g] of __VLS_getVForSourceType((__VLS_ctx.adminGroups))) {
+                __VLS_asFunctionalElement(__VLS_intrinsicElements.li, __VLS_intrinsicElements.li)({
+                    key: (g.id),
+                    ...{ class: "group-card" },
+                });
+                __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
+                    ...{ class: "group-head" },
+                });
+                __VLS_asFunctionalElement(__VLS_intrinsicElements.strong, __VLS_intrinsicElements.strong)({});
+                (g.name);
+                __VLS_asFunctionalElement(__VLS_intrinsicElements.small, __VLS_intrinsicElements.small)({});
+                (new Date(g.createdAt).toLocaleString());
+                __VLS_asFunctionalElement(__VLS_intrinsicElements.ul, __VLS_intrinsicElements.ul)({
+                    ...{ class: "simple-list" },
+                });
+                for (const [gm] of __VLS_getVForSourceType((g.members))) {
+                    __VLS_asFunctionalElement(__VLS_intrinsicElements.li, __VLS_intrinsicElements.li)({
+                        key: (`${g.id}-${gm.memberId}`),
+                        ...{ class: "group-member-row" },
+                    });
+                    __VLS_asFunctionalElement(__VLS_intrinsicElements.span, __VLS_intrinsicElements.span)({});
+                    (gm.employeeId);
+                    (gm.name);
+                    (gm.role);
+                    if (gm.supervisor) {
+                        __VLS_asFunctionalElement(__VLS_intrinsicElements.strong, __VLS_intrinsicElements.strong)({
+                            ...{ class: "group-supervisor-chip" },
+                        });
+                    }
+                    __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
+                        ...{ class: "row" },
+                    });
+                    if (!gm.supervisor) {
+                        __VLS_asFunctionalElement(__VLS_intrinsicElements.button, __VLS_intrinsicElements.button)({
+                            ...{ onClick: (...[$event]) => {
+                                    if (!!(!__VLS_ctx.isAuthenticated))
+                                        return;
+                                    if (!(__VLS_ctx.dashboardTab === 'members'))
+                                        return;
+                                    if (!!(__VLS_ctx.loadingGroups))
+                                        return;
+                                    if (!(!gm.supervisor))
+                                        return;
+                                    __VLS_ctx.setGroupSupervisor(g.id, gm.memberId);
+                                } },
+                        });
+                    }
+                    __VLS_asFunctionalElement(__VLS_intrinsicElements.button, __VLS_intrinsicElements.button)({
+                        ...{ onClick: (...[$event]) => {
+                                if (!!(!__VLS_ctx.isAuthenticated))
+                                    return;
+                                if (!(__VLS_ctx.dashboardTab === 'members'))
+                                    return;
+                                if (!!(__VLS_ctx.loadingGroups))
+                                    return;
+                                __VLS_ctx.removeMemberFromGroup(g.id, gm.memberId);
+                            } },
+                        ...{ class: "danger" },
+                    });
+                }
+            }
+        }
     }
     if (__VLS_ctx.lightboxOpen) {
         __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
@@ -1240,9 +1810,12 @@ else {
 /** @type {__VLS_StyleScopedClasses['status-closed']} */ ;
 /** @type {__VLS_StyleScopedClasses['stat-chip']} */ ;
 /** @type {__VLS_StyleScopedClasses['status-deleted']} */ ;
+/** @type {__VLS_StyleScopedClasses['ticket-filters']} */ ;
 /** @type {__VLS_StyleScopedClasses['ticket-list']} */ ;
 /** @type {__VLS_StyleScopedClasses['ticket-head']} */ ;
 /** @type {__VLS_StyleScopedClasses['ticket-toggle']} */ ;
+/** @type {__VLS_StyleScopedClasses['deleted-badge']} */ ;
+/** @type {__VLS_StyleScopedClasses['supervisor-approve-btn']} */ ;
 /** @type {__VLS_StyleScopedClasses['danger']} */ ;
 /** @type {__VLS_StyleScopedClasses['ticket-delete-btn']} */ ;
 /** @type {__VLS_StyleScopedClasses['status-hint']} */ ;
@@ -1251,6 +1824,9 @@ else {
 /** @type {__VLS_StyleScopedClasses['link-button']} */ ;
 /** @type {__VLS_StyleScopedClasses['message-box']} */ ;
 /** @type {__VLS_StyleScopedClasses['simple-list']} */ ;
+/** @type {__VLS_StyleScopedClasses['status-history-box']} */ ;
+/** @type {__VLS_StyleScopedClasses['simple-list']} */ ;
+/** @type {__VLS_StyleScopedClasses['status-history-list']} */ ;
 /** @type {__VLS_StyleScopedClasses['it-actions']} */ ;
 /** @type {__VLS_StyleScopedClasses['row']} */ ;
 /** @type {__VLS_StyleScopedClasses['feedback']} */ ;
@@ -1260,6 +1836,21 @@ else {
 /** @type {__VLS_StyleScopedClasses['feedback']} */ ;
 /** @type {__VLS_StyleScopedClasses['error']} */ ;
 /** @type {__VLS_StyleScopedClasses['member-table']} */ ;
+/** @type {__VLS_StyleScopedClasses['row']} */ ;
+/** @type {__VLS_StyleScopedClasses['danger']} */ ;
+/** @type {__VLS_StyleScopedClasses['group-admin']} */ ;
+/** @type {__VLS_StyleScopedClasses['subtitle']} */ ;
+/** @type {__VLS_StyleScopedClasses['feedback']} */ ;
+/** @type {__VLS_StyleScopedClasses['error']} */ ;
+/** @type {__VLS_StyleScopedClasses['row']} */ ;
+/** @type {__VLS_StyleScopedClasses['row']} */ ;
+/** @type {__VLS_StyleScopedClasses['simple-list']} */ ;
+/** @type {__VLS_StyleScopedClasses['group-list']} */ ;
+/** @type {__VLS_StyleScopedClasses['group-card']} */ ;
+/** @type {__VLS_StyleScopedClasses['group-head']} */ ;
+/** @type {__VLS_StyleScopedClasses['simple-list']} */ ;
+/** @type {__VLS_StyleScopedClasses['group-member-row']} */ ;
+/** @type {__VLS_StyleScopedClasses['group-supervisor-chip']} */ ;
 /** @type {__VLS_StyleScopedClasses['row']} */ ;
 /** @type {__VLS_StyleScopedClasses['danger']} */ ;
 /** @type {__VLS_StyleScopedClasses['lightbox']} */ ;
@@ -1283,13 +1874,26 @@ const __VLS_self = (await import('vue')).defineComponent({
             ticketFeedbackType: ticketFeedbackType,
             tickets: tickets,
             loadingTickets: loadingTickets,
+            ticketKeyword: ticketKeyword,
+            onlyMyTickets: onlyMyTickets,
+            createdTimeSort: createdTimeSort,
+            statusFilter: statusFilter,
             members: members,
             loadingMembers: loadingMembers,
             membersFeedback: membersFeedback,
+            myGroups: myGroups,
+            adminGroups: adminGroups,
+            loadingGroups: loadingGroups,
+            groupsFeedback: groupsFeedback,
+            createGroupName: createGroupName,
+            groupAssignForm: groupAssignForm,
             replyInputs: replyInputs,
+            statusDrafts: statusDrafts,
             itActionLoading: itActionLoading,
             itFeedback: itFeedback,
             openTicketIds: openTicketIds,
+            newTicketHighlights: newTicketHighlights,
+            jumpTicketHighlights: jumpTicketHighlights,
             lightboxOpen: lightboxOpen,
             lightboxSrc: lightboxSrc,
             lightboxTitle: lightboxTitle,
@@ -1301,10 +1905,14 @@ const __VLS_self = (await import('vue')).defineComponent({
             isAuthenticated: isAuthenticated,
             isAdmin: isAdmin,
             isItOrAdmin: isItOrAdmin,
+            normalizeStatus: normalizeStatus,
             effectiveStatus: effectiveStatus,
+            isTicketDeleted: isTicketDeleted,
             ticketStats: ticketStats,
+            filteredTickets: filteredTickets,
             formatSize: formatSize,
             displayStatus: displayStatus,
+            formatStatusTransition: formatStatusTransition,
             attachmentDownloadUrl: attachmentDownloadUrl,
             isImageAttachment: isImageAttachment,
             openImageLightbox: openImageLightbox,
@@ -1316,15 +1924,21 @@ const __VLS_self = (await import('vue')).defineComponent({
             logout: logout,
             onFilesChanged: onFilesChanged,
             submitTicket: submitTicket,
-            getNextStatus: getNextStatus,
-            quickAdvanceTicketStatus: quickAdvanceTicketStatus,
+            updateTicketStatus: updateTicketStatus,
             sendReply: sendReply,
             markAllNotificationsRead: markAllNotificationsRead,
             openNotification: openNotification,
             toggleTicket: toggleTicket,
             canDeleteTicket: canDeleteTicket,
             softDeleteTicket: softDeleteTicket,
+            canSupervisorApprove: canSupervisorApprove,
+            supervisorApproveTicket: supervisorApproveTicket,
             loadMembers: loadMembers,
+            loadAdminGroups: loadAdminGroups,
+            createAdminGroup: createAdminGroup,
+            addMemberToGroup: addMemberToGroup,
+            removeMemberFromGroup: removeMemberFromGroup,
+            setGroupSupervisor: setGroupSupervisor,
             updateMemberRole: updateMemberRole,
             deleteMember: deleteMember,
         };

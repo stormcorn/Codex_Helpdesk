@@ -42,12 +42,15 @@ public class HelpdeskController {
             @RequestParam String email,
             @RequestParam String subject,
             @RequestParam String description,
+            @RequestParam(value = "groupId", required = false) Long groupId,
+            @RequestParam(value = "priority", required = false) String priority,
             @RequestParam(value = "files", required = false) List<MultipartFile> files
     ) {
         Member member = authService.requireMember(authorization);
         if (isBlank(name) || isBlank(email) || isBlank(subject) || isBlank(description)) {
             throw new IllegalArgumentException("All fields are required");
         }
+        HelpdeskTicketPriority ticketPriority = parsePriority(priority);
 
         HelpdeskTicket saved = service.createTicket(
                 member,
@@ -55,6 +58,8 @@ public class HelpdeskController {
                 email,
                 subject,
                 description,
+                groupId,
+                ticketPriority,
                 files == null ? List.of() : files
         );
 
@@ -110,6 +115,16 @@ public class HelpdeskController {
         return TicketResponse.from(updated, service);
     }
 
+    @PatchMapping("/{ticketId}/supervisor-approve")
+    public TicketResponse supervisorApprove(
+            @RequestHeader(value = "Authorization", required = false) String authorization,
+            @PathVariable Long ticketId
+    ) {
+        Member member = authService.requireMember(authorization);
+        HelpdeskTicket updated = service.approveUrgentTicket(ticketId, member);
+        return TicketResponse.from(updated, service);
+    }
+
     @GetMapping("/{ticketId}/attachments/{attachmentId}/download")
     public ResponseEntity<Resource> download(
             @RequestHeader(value = "Authorization", required = false) String authorization,
@@ -147,6 +162,17 @@ public class HelpdeskController {
         return value == null || value.isBlank();
     }
 
+    private HelpdeskTicketPriority parsePriority(String rawPriority) {
+        if (rawPriority == null || rawPriority.isBlank()) {
+            return HelpdeskTicketPriority.GENERAL;
+        }
+        try {
+            return HelpdeskTicketPriority.valueOf(rawPriority.trim().toUpperCase());
+        } catch (Exception ex) {
+            throw new IllegalArgumentException("Priority must be GENERAL or URGENT");
+        }
+    }
+
     private String resolveAuthorization(String authorization, String token) {
         if (authorization != null && !authorization.isBlank()) {
             return authorization;
@@ -158,9 +184,13 @@ public class HelpdeskController {
     }
 
     public record TicketResponse(Long id, String name, String email, String subject, String description, String status,
-                                 Long createdByMemberId, boolean deleted, LocalDateTime deletedAt, LocalDateTime createdAt,
+                                 String priority, boolean supervisorApproved, Long supervisorApprovedByMemberId,
+                                 LocalDateTime supervisorApprovedAt, Long groupId, String groupName,
+                                 Long createdByMemberId, boolean deleted,
+                                 LocalDateTime deletedAt, LocalDateTime createdAt,
                                  List<AttachmentResponse> attachments,
-                                 List<MessageResponse> messages) {
+                                 List<MessageResponse> messages,
+                                 List<StatusHistoryResponse> statusHistories) {
         static TicketResponse from(HelpdeskTicket ticket, HelpdeskTicketService service) {
             return new TicketResponse(
                     ticket.getId(),
@@ -169,12 +199,19 @@ public class HelpdeskController {
                     ticket.getSubject(),
                     ticket.getDescription(),
                     ticket.getStatus().name(),
+                    ticket.getPriority().name(),
+                    ticket.isSupervisorApproved(),
+                    ticket.getSupervisorApprovedByMemberId(),
+                    ticket.getSupervisorApprovedAt(),
+                    ticket.getGroup() == null ? null : ticket.getGroup().getId(),
+                    ticket.getGroup() == null ? null : ticket.getGroup().getName(),
                     ticket.getCreatedByMemberId(),
                     ticket.isDeleted(),
                     ticket.getDeletedAt(),
                     ticket.getCreatedAt(),
                     ticket.getAttachments().stream().map(AttachmentResponse::from).toList(),
-                    service.sortMessagesByCreatedAt(ticket.getMessages()).stream().map(MessageResponse::from).toList()
+                    service.sortMessagesByCreatedAt(ticket.getMessages()).stream().map(MessageResponse::from).toList(),
+                    service.sortStatusHistoriesByCreatedAt(ticket.getStatusHistories()).stream().map(StatusHistoryResponse::from).toList()
             );
         }
     }
@@ -200,6 +237,23 @@ public class HelpdeskController {
                     message.getAuthorName(),
                     message.getAuthorRole().name(),
                     message.getCreatedAt()
+            );
+        }
+    }
+
+    public record StatusHistoryResponse(Long id, String fromStatus, String toStatus, Long changedByMemberId,
+                                        String changedByEmployeeId, String changedByName, String changedByRole,
+                                        LocalDateTime createdAt) {
+        static StatusHistoryResponse from(HelpdeskTicketStatusHistory history) {
+            return new StatusHistoryResponse(
+                    history.getId(),
+                    history.getFromStatus() == null ? null : history.getFromStatus().name(),
+                    history.getToStatus().name(),
+                    history.getChangedByMemberId(),
+                    history.getChangedByEmployeeId(),
+                    history.getChangedByName(),
+                    history.getChangedByRole(),
+                    history.getCreatedAt()
             );
         }
     }
