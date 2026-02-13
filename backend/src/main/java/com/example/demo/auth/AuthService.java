@@ -6,6 +6,7 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
+import com.example.demo.email.EmailNotificationService;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -20,13 +21,19 @@ public class AuthService {
 
     private final MemberRepository memberRepository;
     private final AuthTokenRepository tokenRepository;
+    private final EmailNotificationService emailNotificationService;
 
     @Value("${app.auth.token-hours:24}")
     private long tokenHours;
 
-    public AuthService(MemberRepository memberRepository, AuthTokenRepository tokenRepository) {
+    public AuthService(
+            MemberRepository memberRepository,
+            AuthTokenRepository tokenRepository,
+            EmailNotificationService emailNotificationService
+    ) {
         this.memberRepository = memberRepository;
         this.tokenRepository = tokenRepository;
+        this.emailNotificationService = emailNotificationService;
     }
 
     @Transactional
@@ -60,6 +67,7 @@ public class AuthService {
         );
 
         Member saved = memberRepository.save(member);
+        emailNotificationService.enqueueUserRegistered(saved);
         return createToken(saved);
     }
 

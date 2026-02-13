@@ -3,6 +3,7 @@ package com.example.demo.helpdesk;
 import com.example.demo.audit.AuditLogService;
 import com.example.demo.auth.Member;
 import com.example.demo.auth.MemberRole;
+import com.example.demo.email.EmailNotificationService;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.example.demo.group.DepartmentGroup;
@@ -43,6 +44,7 @@ public class HelpdeskTicketService {
     private final ObjectMapper objectMapper;
     private final DepartmentGroupService groupService;
     private final NotificationService notificationService;
+    private final EmailNotificationService emailNotificationService;
     private final Path uploadDir;
 
     public HelpdeskTicketService(
@@ -53,6 +55,7 @@ public class HelpdeskTicketService {
             ObjectMapper objectMapper,
             DepartmentGroupService groupService,
             NotificationService notificationService,
+            EmailNotificationService emailNotificationService,
             @Value("${helpdesk.upload-dir:/tmp/helpdesk-uploads}") String uploadDir
     ) {
         this.repository = repository;
@@ -62,6 +65,7 @@ public class HelpdeskTicketService {
         this.objectMapper = objectMapper;
         this.groupService = groupService;
         this.notificationService = notificationService;
+        this.emailNotificationService = emailNotificationService;
         this.uploadDir = Path.of(uploadDir);
     }
 
@@ -139,6 +143,7 @@ public class HelpdeskTicketService {
                 toJson(Map.of("attachmentsCount", finalTicket.getAttachments().size()))
         );
         notificationService.notifyTicketCreated(finalTicket, creator);
+        emailNotificationService.enqueueTicketCreated(finalTicket, creator);
         return finalTicket;
     }
 
@@ -167,6 +172,7 @@ public class HelpdeskTicketService {
         HelpdeskTicket updated = repository.findWithDetailsById(ticketId)
                 .orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "Ticket not found"));
         notificationService.notifyTicketReplied(updated, author);
+        emailNotificationService.enqueueTicketReplied(updated, author);
         return updated;
     }
 
@@ -222,6 +228,9 @@ public class HelpdeskTicketService {
             );
         }
         notificationService.notifyTicketStatusChanged(updated, actor, status);
+        if (status == HelpdeskTicketStatus.CLOSED) {
+            emailNotificationService.enqueueTicketClosed(updated, actor);
+        }
         return updated;
     }
 
@@ -271,6 +280,7 @@ public class HelpdeskTicketService {
         }
         if (!ticket.isSupervisorApproved()) {
             ticket.markSupervisorApproved(actor.getId());
+            appendStatusHistory(ticket, ticket.getStatus(), ticket.getStatus(), actor);
             repository.save(ticket);
         }
         HelpdeskTicket updated = repository.findWithDetailsById(ticketId)

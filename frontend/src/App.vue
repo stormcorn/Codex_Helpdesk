@@ -315,6 +315,9 @@ function isCurrentMemberSupervisorOfGroup(groupId: number | null): boolean {
 
 function formatStatusTransition(history: TicketStatusHistory): string {
   const toStatus = normalizeStatus(history.toStatus);
+  if (history.fromStatus && normalizeStatus(history.fromStatus) === toStatus) {
+    return `主管已確認（${toStatus}）`;
+  }
   if (!history.fromStatus) {
     return `初始化為 ${toStatus}`;
   }
@@ -407,6 +410,7 @@ function applyAuth(newToken: string, member: Member): void {
   localStorage.setItem(TOKEN_KEY, newToken);
   ticketForm.name = member.name;
   ticketForm.email = member.email;
+  ticketForm.groupId = null;
 }
 
 async function login(): Promise<void> {
@@ -506,17 +510,27 @@ function clearSession(): void {
   unreadCount.value = 0;
   notificationsOpen.value = false;
   dashboardTab.value = 'helpdesk';
+  ticketForm.name = '';
+  ticketForm.email = '';
+  ticketForm.groupId = null;
+  ticketForm.priority = 'GENERAL';
 }
 
 async function loadMyGroups(): Promise<void> {
   if (!token.value) return;
   try {
     myGroups.value = await requestJson<MyGroup[]>('/api/groups/mine', { headers: authHeaders() }, '讀取群組失敗');
-    if (myGroups.value.length && !ticketForm.groupId) {
+    if (!myGroups.value.length) {
+      ticketForm.groupId = null;
+      return;
+    }
+    const currentGroupStillValid = myGroups.value.some((g) => g.id === ticketForm.groupId);
+    if (!currentGroupStillValid) {
       ticketForm.groupId = myGroups.value[0].id;
     }
   } catch {
     myGroups.value = [];
+    ticketForm.groupId = null;
   }
 }
 

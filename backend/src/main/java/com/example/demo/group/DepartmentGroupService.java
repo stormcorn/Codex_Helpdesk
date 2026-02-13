@@ -154,7 +154,7 @@ public class DepartmentGroupService {
 
     @Transactional(readOnly = true)
     public List<DepartmentGroupMember> listGroupsOfMember(Long memberId) {
-        return groupMemberRepository.findByMember_Id(memberId);
+        return groupMemberRepository.findByMemberIdWithGroup(memberId);
     }
 
     @Transactional(readOnly = true)

@@ -171,6 +171,9 @@ function isCurrentMemberSupervisorOfGroup(groupId) {
 }
 function formatStatusTransition(history) {
     const toStatus = normalizeStatus(history.toStatus);
+    if (history.fromStatus && normalizeStatus(history.fromStatus) === toStatus) {
+        return `主管已確認（${toStatus}）`;
+    }
     if (!history.fromStatus) {
         return `初始化為 ${toStatus}`;
     }
@@ -252,6 +255,7 @@ function applyAuth(newToken, member) {
     localStorage.setItem(TOKEN_KEY, newToken);
     ticketForm.name = member.name;
     ticketForm.email = member.email;
+    ticketForm.groupId = null;
 }
 async function login() {
     authError.value = '';
@@ -346,18 +350,28 @@ function clearSession() {
     unreadCount.value = 0;
     notificationsOpen.value = false;
     dashboardTab.value = 'helpdesk';
+    ticketForm.name = '';
+    ticketForm.email = '';
+    ticketForm.groupId = null;
+    ticketForm.priority = 'GENERAL';
 }
 async function loadMyGroups() {
     if (!token.value)
         return;
     try {
         myGroups.value = await requestJson('/api/groups/mine', { headers: authHeaders() }, '讀取群組失敗');
-        if (myGroups.value.length && !ticketForm.groupId) {
+        if (!myGroups.value.length) {
+            ticketForm.groupId = null;
+            return;
+        }
+        const currentGroupStillValid = myGroups.value.some((g) => g.id === ticketForm.groupId);
+        if (!currentGroupStillValid) {
             ticketForm.groupId = myGroups.value[0].id;
         }
     }
     catch {
         myGroups.value = [];
+        ticketForm.groupId = null;
     }
 }
 function clearTicketHighlights() {

@@ -3,15 +3,15 @@ services:
     image: postgres:16-alpine
     container_name: fullstack-postgres
     environment:
-      POSTGRES_DB: fullstack
-      POSTGRES_USER: app
-      POSTGRES_PASSWORD: app
+      POSTGRES_DB: ${POSTGRES_DB:-fullstack}
+      POSTGRES_USER: ${POSTGRES_USER:-app}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-app}
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U app -d fullstack"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-app} -d ${POSTGRES_DB:-fullstack}"]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -21,10 +21,24 @@ services:
       context: ./backend
     container_name: fullstack-backend
     environment:
-      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/fullstack
-      SPRING_DATASOURCE_USERNAME: app
-      SPRING_DATASOURCE_PASSWORD: app
-      HELPDESK_UPLOAD_DIR: /app/uploads
+      SPRING_DATASOURCE_URL: ${SPRING_DATASOURCE_URL:-jdbc:postgresql://postgres:5432/fullstack}
+      SPRING_DATASOURCE_USERNAME: ${SPRING_DATASOURCE_USERNAME:-app}
+      SPRING_DATASOURCE_PASSWORD: ${SPRING_DATASOURCE_PASSWORD:-app}
+      HELPDESK_UPLOAD_DIR: ${HELPDESK_UPLOAD_DIR:-/app/uploads}
+      APP_ADMIN_EMPLOYEE_ID: ${APP_ADMIN_EMPLOYEE_ID:-ADMIN001}
+      APP_ADMIN_NAME: ${APP_ADMIN_NAME:-System Admin}
+      APP_ADMIN_EMAIL: ${APP_ADMIN_EMAIL:-admin@example.com}
+      APP_ADMIN_PASSWORD: ${APP_ADMIN_PASSWORD:-Admin@12345}
+      APP_AUDIT_RETENTION_DAYS: ${APP_AUDIT_RETENTION_DAYS:-180}
+      APP_AUDIT_CLEANUP_CRON: ${APP_AUDIT_CLEANUP_CRON:-0 30 3 * * *}
+      APP_EMAIL_PROVIDER: ${APP_EMAIL_PROVIDER:-console}
+      APP_EMAIL_FROM_EMAIL: ${APP_EMAIL_FROM_EMAIL:-no-reply@helpdesk.local}
+      APP_EMAIL_FROM_NAME: ${APP_EMAIL_FROM_NAME:-Helpdesk}
+      APP_EMAIL_APP_URL: ${APP_EMAIL_APP_URL:-http://localhost:5173}
+      APP_EMAIL_WORKER_FIXED_DELAY_MS: ${APP_EMAIL_WORKER_FIXED_DELAY_MS:-15000}
+      APP_EMAIL_WORKER_BATCH_SIZE: ${APP_EMAIL_WORKER_BATCH_SIZE:-50}
+      APP_EMAIL_SENDGRID_API_KEY: ${APP_EMAIL_SENDGRID_API_KEY:-}
+      APP_EMAIL_SENDGRID_ENDPOINT: ${APP_EMAIL_SENDGRID_ENDPOINT:-https://api.sendgrid.com/v3/mail/send}
     depends_on:
       postgres:
         condition: service_healthy
