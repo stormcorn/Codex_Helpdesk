@@ -47,6 +47,12 @@ type MyGroup = {
   supervisor: boolean;
 };
 
+type HelpdeskCategory = {
+  id: number;
+  name: string;
+  createdAt: string;
+};
+
 type AdminGroupMember = {
   memberId: number;
   employeeId: string;
@@ -75,6 +81,8 @@ type Ticket = {
   supervisorApprovedAt: string | null;
   groupId: number | null;
   groupName: string | null;
+  categoryId: number | null;
+  categoryName: string | null;
   createdByMemberId: number | null;
   deleted: boolean;
   deletedAt: string | null;
@@ -126,7 +134,7 @@ const registerForm = reactive({ employeeId: '', name: '', email: '', password: '
 
 const token = ref('');
 const currentMember = ref<Member | null>(null);
-const dashboardTab = ref<'helpdesk' | 'itdesk' | 'members'>('helpdesk');
+const dashboardTab = ref<'helpdesk' | 'itdesk' | 'archive' | 'members'>('helpdesk');
 
 const ticketForm = reactive<{
   name: string;
@@ -135,13 +143,15 @@ const ticketForm = reactive<{
   description: string;
   priority: TicketPriority;
   groupId: number | null;
+  categoryId: number | null;
 }>({
   name: '',
   email: '',
   subject: '',
   description: '',
   priority: 'GENERAL',
-  groupId: null
+  groupId: null,
+  categoryId: null
 });
 const selectedFiles = ref<File[]>([]);
 const submittingTicket = ref(false);
@@ -152,12 +162,17 @@ const loadingTickets = ref(false);
 const ticketKeyword = ref('');
 const onlyMyTickets = ref(false);
 const createdTimeSort = ref<'newest' | 'oldest'>('newest');
-const statusFilter = ref<'ALL' | Ticket['status']>('ALL');
+const statusFilter = ref<'ALL' | 'OPEN' | 'PROCEEDING' | 'PENDING'>('ALL');
+const archiveStatusFilter = ref<'ALL' | 'CLOSED' | 'DELETED'>('ALL');
 
 const members = ref<Member[]>([]);
 const loadingMembers = ref(false);
 const membersFeedback = ref('');
 const myGroups = ref<MyGroup[]>([]);
+const helpdeskCategories = ref<HelpdeskCategory[]>([]);
+const adminHelpdeskCategories = ref<HelpdeskCategory[]>([]);
+const categoryFeedback = ref('');
+const createCategoryName = ref('');
 const adminGroups = ref<AdminGroup[]>([]);
 const loadingGroups = ref(false);
 const groupsFeedback = ref('');
@@ -200,6 +215,7 @@ const ticketHighlightTimers = reactive<Record<string, number>>({});
 const lightboxOpen = ref(false);
 const lightboxSrc = ref('');
 const lightboxTitle = ref('');
+let lightboxObjectUrl: string | null = null;
 const notifications = ref<NotificationItem[]>([]);
 const unreadCount = ref(0);
 const notificationsOpen = ref(false);
@@ -247,15 +263,12 @@ const ticketStats = computed(() => {
   return { total, open, proceeding, pending, closed, deleted, todayNew };
 });
 
-const filteredTickets = computed(() => {
+const baseFilteredTickets = computed(() => {
   const keyword = ticketKeyword.value.trim().toLowerCase();
   const memberId = currentMember.value?.id ?? null;
 
   return [...tickets.value]
     .filter((ticket) => {
-      if (statusFilter.value !== 'ALL' && effectiveStatus(ticket) !== statusFilter.value) {
-        return false;
-      }
       if (onlyMyTickets.value && (!memberId || ticket.createdByMemberId !== memberId)) {
         return false;
       }
@@ -268,6 +281,7 @@ const filteredTickets = computed(() => {
         ticket.name,
         ticket.email,
         ticket.groupName ?? '',
+        ticket.categoryName ?? '',
         ticket.priority,
         effectiveStatus(ticket)
       ]
@@ -280,6 +294,24 @@ const filteredTickets = computed(() => {
       return createdTimeSort.value === 'newest' ? diff : -diff;
     });
 });
+
+const filteredActiveTickets = computed(() =>
+  baseFilteredTickets.value.filter((ticket) => {
+    const status = effectiveStatus(ticket);
+    if (status === 'CLOSED' || status === 'DELETED') return false;
+    if (statusFilter.value === 'ALL') return true;
+    return status === statusFilter.value;
+  })
+);
+
+const filteredArchivedTickets = computed(() =>
+  baseFilteredTickets.value.filter((ticket) => {
+    const status = effectiveStatus(ticket);
+    if (status !== 'CLOSED' && status !== 'DELETED') return false;
+    if (archiveStatusFilter.value === 'ALL') return true;
+    return status === archiveStatusFilter.value;
+  })
+);
 
 function authHeaders(): HeadersInit {
   return { Authorization: `Bearer ${token.value}` };
@@ -304,6 +336,8 @@ function normalizeTicket(ticket: Ticket): Ticket {
     supervisorApprovedAt: ticket.supervisorApprovedAt ?? null,
     groupId: ticket.groupId ?? null,
     groupName: ticket.groupName ?? null,
+    categoryId: ticket.categoryId ?? null,
+    categoryName: ticket.categoryName ?? null,
     statusHistories: Array.isArray(ticket.statusHistories) ? ticket.statusHistories : []
   };
 }
@@ -356,25 +390,79 @@ async function requestJson<T>(url: string, init: RequestInit, fallback: string):
   return (await response.json()) as T;
 }
 
-function attachmentViewUrl(ticketId: number, attachmentId: number): string {
-  return `/api/helpdesk/tickets/${ticketId}/attachments/${attachmentId}/view?token=${encodeURIComponent(token.value)}`;
-}
-
-function attachmentDownloadUrl(ticketId: number, attachmentId: number): string {
-  return `/api/helpdesk/tickets/${ticketId}/attachments/${attachmentId}/download?token=${encodeURIComponent(token.value)}`;
-}
-
 function isImageAttachment(attachment: Attachment): boolean {
   return attachment.contentType.startsWith('image/');
 }
 
-function openImageLightbox(ticketId: number, attachment: Attachment): void {
-  lightboxSrc.value = attachmentViewUrl(ticketId, attachment.id);
-  lightboxTitle.value = attachment.originalFilename;
-  lightboxOpen.value = true;
+function extractFilenameFromDisposition(disposition: string | null): string | null {
+  if (!disposition) return null;
+  const utf8Match = disposition.match(/filename\*=UTF-8''([^;]+)/i);
+  if (utf8Match?.[1]) {
+    try {
+      return decodeURIComponent(utf8Match[1]);
+    } catch {
+      // ignore decode issue
+    }
+  }
+  const plainMatch = disposition.match(/filename="([^"]+)"/i);
+  return plainMatch?.[1] ?? null;
+}
+
+async function fetchAttachmentBlob(ticketId: number, attachmentId: number, action: 'view' | 'download'): Promise<{
+  blob: Blob;
+  filename: string;
+}> {
+  const response = await fetch(`/api/helpdesk/tickets/${ticketId}/attachments/${attachmentId}/${action}`, {
+    headers: authHeaders()
+  });
+  if (!response.ok) {
+    let parsed: unknown = null;
+    try {
+      parsed = await response.json();
+    } catch {
+      // ignore
+    }
+    throw new Error(parseErrorMessage('讀取附件失敗', parsed));
+  }
+  const blob = await response.blob();
+  const filename = extractFilenameFromDisposition(response.headers.get('Content-Disposition')) ?? `attachment-${attachmentId}`;
+  return { blob, filename };
+}
+
+async function openImageLightbox(ticketId: number, attachment: Attachment): Promise<void> {
+  try {
+    const { blob } = await fetchAttachmentBlob(ticketId, attachment.id, 'view');
+    if (lightboxObjectUrl) {
+      URL.revokeObjectURL(lightboxObjectUrl);
+    }
+    lightboxObjectUrl = URL.createObjectURL(blob);
+    lightboxSrc.value = lightboxObjectUrl;
+    lightboxTitle.value = attachment.originalFilename;
+    lightboxOpen.value = true;
+  } catch (e) {
+    itFeedback.value = e instanceof Error ? e.message : '讀取附件失敗';
+  }
+}
+
+async function downloadAttachment(ticketId: number, attachment: Attachment): Promise<void> {
+  try {
+    const { blob, filename } = await fetchAttachmentBlob(ticketId, attachment.id, 'download');
+    const objectUrl = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = objectUrl;
+    anchor.download = filename || attachment.originalFilename;
+    anchor.click();
+    URL.revokeObjectURL(objectUrl);
+  } catch (e) {
+    itFeedback.value = e instanceof Error ? e.message : '下載附件失敗';
+  }
 }
 
 function closeLightbox(): void {
+  if (lightboxObjectUrl) {
+    URL.revokeObjectURL(lightboxObjectUrl);
+    lightboxObjectUrl = null;
+  }
   lightboxOpen.value = false;
   lightboxSrc.value = '';
   lightboxTitle.value = '';
@@ -407,10 +495,11 @@ function prevRegisterStep(): void {
 function applyAuth(newToken: string, member: Member): void {
   token.value = newToken;
   currentMember.value = member;
-  localStorage.setItem(TOKEN_KEY, newToken);
+  sessionStorage.setItem(TOKEN_KEY, newToken);
   ticketForm.name = member.name;
   ticketForm.email = member.email;
   ticketForm.groupId = null;
+  ticketForm.categoryId = null;
 }
 
 async function login(): Promise<void> {
@@ -450,7 +539,7 @@ async function register(): Promise<void> {
 }
 
 async function restoreSession(): Promise<void> {
-  const saved = localStorage.getItem(TOKEN_KEY);
+  const saved = sessionStorage.getItem(TOKEN_KEY);
   if (!saved) return;
   token.value = saved;
   try {
@@ -466,6 +555,7 @@ async function restoreSession(): Promise<void> {
 
 async function afterLoginLoad(): Promise<void> {
   await loadMyGroups();
+  await loadHelpdeskCategories();
   await loadTickets();
   await loadNotifications();
   startNotificationPolling();
@@ -473,6 +563,7 @@ async function afterLoginLoad(): Promise<void> {
     dashboardTab.value = 'members';
     await loadMembers();
     await loadAdminGroups();
+    await loadAdminHelpdeskCategories();
     await loadAuditLogs();
   } else if (isItOrAdmin.value) {
     dashboardTab.value = 'itdesk';
@@ -494,12 +585,17 @@ async function logout(): Promise<void> {
 function clearSession(): void {
   stopNotificationPolling();
   clearTicketHighlights();
+  closeLightbox();
   token.value = '';
   currentMember.value = null;
-  localStorage.removeItem(TOKEN_KEY);
+  sessionStorage.removeItem(TOKEN_KEY);
   tickets.value = [];
   members.value = [];
   myGroups.value = [];
+  helpdeskCategories.value = [];
+  adminHelpdeskCategories.value = [];
+  createCategoryName.value = '';
+  categoryFeedback.value = '';
   adminGroups.value = [];
   createGroupName.value = '';
   groupAssignForm.groupId = null;
@@ -513,6 +609,7 @@ function clearSession(): void {
   ticketForm.name = '';
   ticketForm.email = '';
   ticketForm.groupId = null;
+  ticketForm.categoryId = null;
   ticketForm.priority = 'GENERAL';
 }
 
@@ -531,6 +628,28 @@ async function loadMyGroups(): Promise<void> {
   } catch {
     myGroups.value = [];
     ticketForm.groupId = null;
+  }
+}
+
+async function loadHelpdeskCategories(): Promise<void> {
+  if (!token.value) return;
+  try {
+    helpdeskCategories.value = await requestJson<HelpdeskCategory[]>(
+      '/api/helpdesk/categories',
+      { headers: authHeaders() },
+      '讀取分類失敗'
+    );
+    if (!helpdeskCategories.value.length) {
+      ticketForm.categoryId = null;
+      return;
+    }
+    const currentCategoryStillValid = helpdeskCategories.value.some((c) => c.id === ticketForm.categoryId);
+    if (!currentCategoryStillValid) {
+      ticketForm.categoryId = helpdeskCategories.value[0].id;
+    }
+  } catch {
+    helpdeskCategories.value = [];
+    ticketForm.categoryId = null;
   }
 }
 
@@ -608,6 +727,11 @@ async function submitTicket(): Promise<void> {
     ticketFeedbackType.value = 'error';
     return;
   }
+  if (!ticketForm.categoryId) {
+    ticketFeedback.value = '請選擇工單分類。';
+    ticketFeedbackType.value = 'error';
+    return;
+  }
 
   const oversized = selectedFiles.value.find((f) => f.size >= MAX_FILE_BYTES);
   if (oversized) {
@@ -624,6 +748,7 @@ async function submitTicket(): Promise<void> {
     formData.append('subject', ticketForm.subject);
     formData.append('description', ticketForm.description);
     formData.append('groupId', String(ticketForm.groupId));
+    formData.append('categoryId', String(ticketForm.categoryId));
     formData.append('priority', ticketForm.priority);
     selectedFiles.value.forEach((f) => formData.append('files', f));
 
@@ -648,6 +773,9 @@ async function submitTicket(): Promise<void> {
     ticketForm.priority = 'GENERAL';
     if (!ticketForm.groupId && myGroups.value.length) {
       ticketForm.groupId = myGroups.value[0].id;
+    }
+    if (!ticketForm.categoryId && helpdeskCategories.value.length) {
+      ticketForm.categoryId = helpdeskCategories.value[0].id;
     }
   } catch (e) {
     ticketFeedback.value = e instanceof Error ? e.message : '送出失敗';
@@ -779,8 +907,10 @@ async function openNotification(item: NotificationItem): Promise<void> {
     await markNotificationRead(item.id);
   }
   if (item.ticketId) {
-    dashboardTab.value = isItOrAdmin.value ? 'itdesk' : 'helpdesk';
     await loadTickets();
+    const targetTicket = tickets.value.find((t) => t.id === item.ticketId);
+    const archived = targetTicket ? ['CLOSED', 'DELETED'].includes(effectiveStatus(targetTicket)) : false;
+    dashboardTab.value = archived ? 'archive' : isItOrAdmin.value ? 'itdesk' : 'helpdesk';
     openTicketIds[item.ticketId] = true;
     window.setTimeout(() => {
       const target = document.getElementById(`ticket-${item.ticketId}`);
@@ -874,6 +1004,46 @@ async function loadAdminGroups(): Promise<void> {
     groupsFeedback.value = e instanceof Error ? e.message : '讀取群組失敗';
   } finally {
     loadingGroups.value = false;
+  }
+}
+
+async function loadAdminHelpdeskCategories(): Promise<void> {
+  if (!isAdmin.value) return;
+  categoryFeedback.value = '';
+  try {
+    adminHelpdeskCategories.value = await requestJson<HelpdeskCategory[]>(
+      '/api/admin/helpdesk-categories',
+      { headers: authHeaders() },
+      '讀取分類失敗'
+    );
+  } catch (e) {
+    categoryFeedback.value = e instanceof Error ? e.message : '讀取分類失敗';
+  }
+}
+
+async function createHelpdeskCategory(): Promise<void> {
+  if (!isAdmin.value) return;
+  const name = createCategoryName.value.trim();
+  if (!name) {
+    categoryFeedback.value = '請輸入分類名稱。';
+    return;
+  }
+  categoryFeedback.value = '';
+  try {
+    await requestJson<HelpdeskCategory>(
+      '/api/admin/helpdesk-categories',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ name })
+      },
+      '建立分類失敗'
+    );
+    createCategoryName.value = '';
+    await loadAdminHelpdeskCategories();
+    await loadHelpdeskCategories();
+  } catch (e) {
+    categoryFeedback.value = e instanceof Error ? e.message : '建立分類失敗';
   }
 }
 
@@ -1112,6 +1282,7 @@ onMounted(async () => {
 });
 
 onBeforeUnmount(() => {
+  closeLightbox();
   stopNotificationPolling();
   clearTicketHighlights();
 });
@@ -1204,10 +1375,11 @@ onBeforeUnmount(() => {
       <section class="tabs">
         <button :class="{ active: dashboardTab === 'helpdesk' }" @click="dashboardTab = 'helpdesk'">提交工單</button>
         <button v-if="isItOrAdmin" :class="{ active: dashboardTab === 'itdesk' }" @click="dashboardTab = 'itdesk'">IT 工單處理</button>
+        <button :class="{ active: dashboardTab === 'archive' }" @click="dashboardTab = 'archive'">封存</button>
         <button
           v-if="isAdmin"
           :class="{ active: dashboardTab === 'members' }"
-          @click="dashboardTab = 'members'; loadMembers(); loadAdminGroups(); loadAuditLogs()"
+          @click="dashboardTab = 'members'; loadMembers(); loadAdminGroups(); loadAdminHelpdeskCategories(); loadAuditLogs()"
         >
           成員管理
         </button>
@@ -1222,6 +1394,12 @@ onBeforeUnmount(() => {
             <select v-model="ticketForm.groupId" required>
               <option :value="null" disabled>請選擇群組</option>
               <option v-for="g in myGroups" :key="g.id" :value="g.id">{{ g.name }}</option>
+            </select>
+          </label>
+          <label>工單分類
+            <select v-model="ticketForm.categoryId" required>
+              <option :value="null" disabled>請選擇分類</option>
+              <option v-for="c in helpdeskCategories" :key="c.id" :value="c.id">{{ c.name }}</option>
             </select>
           </label>
           <label>主旨<input v-model="ticketForm.subject" required /></label>
@@ -1243,7 +1421,7 @@ onBeforeUnmount(() => {
 
       <section v-if="dashboardTab === 'itdesk' || dashboardTab === 'helpdesk'" class="panel">
         <div class="ticket-list-top">
-          <h2>工單列表</h2>
+          <h2>進行中工單</h2>
           <div class="ticket-stats">
             <span class="stat-chip">總數 <strong>{{ ticketStats.total }}</strong></span>
             <span class="stat-chip">本日新增 <strong>{{ ticketStats.todayNew }}</strong></span>
@@ -1277,17 +1455,15 @@ onBeforeUnmount(() => {
               <option value="OPEN">OPEN</option>
               <option value="PROCEEDING">PROCEEDING</option>
               <option value="PENDING">PENDING</option>
-              <option value="CLOSED">CLOSED</option>
-              <option value="DELETED">DELETED</option>
             </select>
           </label>
-          <small>顯示 {{ filteredTickets.length }} / {{ tickets.length }} 筆</small>
+          <small>顯示 {{ filteredActiveTickets.length }} / {{ tickets.length }} 筆</small>
         </div>
         <p v-if="loadingTickets">讀取中...</p>
-        <p v-else-if="!filteredTickets.length">沒有符合條件的工單</p>
+        <p v-else-if="!filteredActiveTickets.length">沒有符合條件的工單</p>
         <ul v-else class="ticket-list">
           <li
-            v-for="ticket in filteredTickets"
+            v-for="ticket in filteredActiveTickets"
             :id="`ticket-${ticket.id}`"
             :key="ticket.id"
             :class="[
@@ -1308,6 +1484,7 @@ onBeforeUnmount(() => {
               <small :class="['ticket-meta', { 'deleted-meta': isTicketDeleted(ticket) }]">
                 {{ ticket.name }} · {{ new Date(ticket.createdAt).toLocaleString() }}
                 <template v-if="ticket.groupName"> · 群組 {{ ticket.groupName }}</template>
+                <template v-if="ticket.categoryName"> · 分類 {{ ticket.categoryName }}</template>
               </small>
               <span :class="['priority-tag', `priority-${ticket.priority.toLowerCase()}`]">
                 {{ ticket.priority === 'URGENT' ? '急件' : '一般' }}
@@ -1364,7 +1541,7 @@ onBeforeUnmount(() => {
                       <button class="link-button" type="button" @click="openImageLightbox(ticket.id, att)">預覽 {{ att.originalFilename }}</button>
                     </template>
                     <template v-else>
-                      <a :href="attachmentDownloadUrl(ticket.id, att.id)" target="_blank" rel="noopener">下載 {{ att.originalFilename }}</a>
+                      <button class="link-button" type="button" @click="downloadAttachment(ticket.id, att)">下載 {{ att.originalFilename }}</button>
                     </template>
                   </li>
                 </ul>
@@ -1407,6 +1584,124 @@ onBeforeUnmount(() => {
           </li>
         </ul>
         <p v-if="itFeedback" class="feedback error">{{ itFeedback }}</p>
+      </section>
+
+      <section v-if="dashboardTab === 'archive'" class="panel">
+        <div class="ticket-list-top">
+          <h2>封存工單</h2>
+        </div>
+        <div class="ticket-filters">
+          <label>
+            關鍵字搜尋
+            <input v-model="ticketKeyword" placeholder="工單編號 / 主旨 / 內容 / 建立人 / Email" />
+          </label>
+          <label>
+            我的工單
+            <input v-model="onlyMyTickets" type="checkbox" />
+          </label>
+          <label>
+            依建立時間排序
+            <select v-model="createdTimeSort">
+              <option value="newest">新到舊</option>
+              <option value="oldest">舊到新</option>
+            </select>
+          </label>
+          <label>
+            依狀態篩選
+            <select v-model="archiveStatusFilter">
+              <option value="ALL">全部</option>
+              <option value="CLOSED">CLOSED</option>
+              <option value="DELETED">DELETED</option>
+            </select>
+          </label>
+          <small>顯示 {{ filteredArchivedTickets.length }} / {{ tickets.length }} 筆</small>
+        </div>
+        <p v-if="loadingTickets">讀取中...</p>
+        <p v-else-if="!filteredArchivedTickets.length">目前沒有封存工單</p>
+        <ul v-else class="ticket-list">
+          <li
+            v-for="ticket in filteredArchivedTickets"
+            :id="`ticket-${ticket.id}`"
+            :key="ticket.id"
+            :class="[
+              'ticket-card',
+              `ticket-card-${effectiveStatus(ticket).toLowerCase()}`,
+              {
+                expanded: openTicketIds[ticket.id],
+                'new-ticket-highlight': newTicketHighlights[ticket.id],
+                'jump-ticket-highlight': jumpTicketHighlights[ticket.id]
+              }
+            ]"
+          >
+            <div class="ticket-head">
+              <button class="ticket-toggle" type="button" @click="toggleTicket(ticket.id)">
+                <strong :class="{ 'deleted-title': isTicketDeleted(ticket) }">#{{ ticket.id }} {{ ticket.subject }}</strong>
+                <small>{{ openTicketIds[ticket.id] ? '收合' : '展開' }}</small>
+              </button>
+              <small :class="['ticket-meta', { 'deleted-meta': isTicketDeleted(ticket) }]">
+                {{ ticket.name }} · {{ new Date(ticket.createdAt).toLocaleString() }}
+                <template v-if="ticket.groupName"> · 群組 {{ ticket.groupName }}</template>
+                <template v-if="ticket.categoryName"> · 分類 {{ ticket.categoryName }}</template>
+              </small>
+              <span :class="['priority-tag', `priority-${ticket.priority.toLowerCase()}`]">
+                {{ ticket.priority === 'URGENT' ? '急件' : '一般' }}
+              </span>
+              <span
+                v-if="ticket.priority === 'URGENT'"
+                :class="['approval-tag', ticket.supervisorApproved ? 'approved' : 'pending']"
+              >
+                {{ ticket.supervisorApproved ? '主管已確認' : '需主管確認' }}
+              </span>
+              <span v-if="isTicketDeleted(ticket)" class="deleted-badge" aria-label="已刪除工單">🗑 已刪除</span>
+              <span :class="['status-tag', `status-${effectiveStatus(ticket).toLowerCase()}`]">{{ displayStatus(ticket) }}</span>
+            </div>
+            <Transition name="ticket-expand">
+              <div v-if="openTicketIds[ticket.id]" class="ticket-content">
+                <p :class="{ 'deleted-content': isTicketDeleted(ticket) }">{{ ticket.description }}</p>
+                <small>{{ ticket.email }}</small>
+                <small v-if="ticket.deletedAt"> · 已刪除於 {{ new Date(ticket.deletedAt).toLocaleString() }}</small>
+
+                <ul v-if="ticket.attachments.length" class="simple-list">
+                  <li v-for="att in ticket.attachments" :key="att.id">
+                    <template v-if="isImageAttachment(att)">
+                      <button class="link-button" type="button" @click="openImageLightbox(ticket.id, att)">預覽 {{ att.originalFilename }}</button>
+                    </template>
+                    <template v-else>
+                      <button class="link-button" type="button" @click="downloadAttachment(ticket.id, att)">下載 {{ att.originalFilename }}</button>
+                    </template>
+                  </li>
+                </ul>
+
+                <div class="message-box">
+                  <h4>工單訊息</h4>
+                  <ul class="simple-list">
+                    <li v-for="msg in ticket.messages" :key="msg.id">
+                      <strong>[{{ msg.authorRole }}] {{ msg.authorName }}</strong>：{{ msg.content }}
+                      <small> · {{ new Date(msg.createdAt).toLocaleString() }}</small>
+                    </li>
+                  </ul>
+                </div>
+
+                <div class="status-history-box">
+                  <h4>狀態歷程</h4>
+                  <ul v-if="ticket.statusHistories.length" class="simple-list status-history-list">
+                    <li v-for="history in ticket.statusHistories" :key="history.id">
+                      <span :class="['status-tag', `status-${normalizeStatus(history.toStatus).toLowerCase()}`]">
+                        {{ normalizeStatus(history.toStatus) }}
+                      </span>
+                      <small>
+                        {{ formatStatusTransition(history) }} ·
+                        {{ history.changedByRole }} {{ history.changedByName }} ({{ history.changedByEmployeeId }}) ·
+                        {{ new Date(history.createdAt).toLocaleString() }}
+                      </small>
+                    </li>
+                  </ul>
+                  <small v-else>尚無狀態變更紀錄</small>
+                </div>
+              </div>
+            </Transition>
+          </li>
+        </ul>
       </section>
 
       <section v-if="dashboardTab === 'members'" class="panel">
@@ -1481,6 +1776,24 @@ onBeforeUnmount(() => {
                   </div>
                 </li>
               </ul>
+            </li>
+          </ul>
+        </div>
+
+        <div class="group-admin">
+          <h3>工單分類管理</h3>
+          <p class="subtitle">ADMIN 可新增分類，使用者提交工單時需選擇分類。</p>
+          <p v-if="categoryFeedback" class="feedback error">{{ categoryFeedback }}</p>
+
+          <div class="row">
+            <input v-model="createCategoryName" placeholder="新分類名稱" />
+            <button @click="createHelpdeskCategory">建立分類</button>
+          </div>
+
+          <ul class="simple-list">
+            <li v-for="c in adminHelpdeskCategories" :key="c.id">
+              <strong>{{ c.name }}</strong>
+              <small> · 建立於 {{ new Date(c.createdAt).toLocaleString() }}</small>
             </li>
           </ul>
         </div>

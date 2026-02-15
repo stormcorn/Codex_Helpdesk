@@ -43,6 +43,7 @@ public class HelpdeskTicketService {
     private final AuditLogService auditLogService;
     private final ObjectMapper objectMapper;
     private final DepartmentGroupService groupService;
+    private final HelpdeskCategoryService categoryService;
     private final NotificationService notificationService;
     private final EmailNotificationService emailNotificationService;
     private final Path uploadDir;
@@ -54,6 +55,7 @@ public class HelpdeskTicketService {
             AuditLogService auditLogService,
             ObjectMapper objectMapper,
             DepartmentGroupService groupService,
+            HelpdeskCategoryService categoryService,
             NotificationService notificationService,
             EmailNotificationService emailNotificationService,
             @Value("${helpdesk.upload-dir:/tmp/helpdesk-uploads}") String uploadDir
@@ -64,6 +66,7 @@ public class HelpdeskTicketService {
         this.auditLogService = auditLogService;
         this.objectMapper = objectMapper;
         this.groupService = groupService;
+        this.categoryService = categoryService;
         this.notificationService = notificationService;
         this.emailNotificationService = emailNotificationService;
         this.uploadDir = Path.of(uploadDir);
@@ -77,6 +80,7 @@ public class HelpdeskTicketService {
             String subject,
             String description,
             Long groupId,
+            Long categoryId,
             HelpdeskTicketPriority priority,
             List<MultipartFile> files
     ) {
@@ -84,6 +88,10 @@ public class HelpdeskTicketService {
             throw new ResponseStatusException(BAD_REQUEST, "Group is required");
         }
         DepartmentGroup group = groupService.requireGroup(groupId);
+        if (categoryId == null) {
+            throw new ResponseStatusException(BAD_REQUEST, "Category is required");
+        }
+        HelpdeskCategory category = categoryService.requireCategory(categoryId);
         if (!groupService.isMemberInGroup(groupId, creator.getId())) {
             throw new ResponseStatusException(FORBIDDEN, "You are not a member of this group");
         }
@@ -98,6 +106,7 @@ public class HelpdeskTicketService {
                 description.trim(),
                 creator.getId(),
                 group,
+                category,
                 priority
         );
         HelpdeskTicket savedTicket = repository.save(ticket);
@@ -367,6 +376,8 @@ public class HelpdeskTicketService {
         out.put("supervisorApproved", ticket.isSupervisorApproved());
         out.put("groupId", ticket.getGroup() == null ? null : ticket.getGroup().getId());
         out.put("groupName", ticket.getGroup() == null ? null : ticket.getGroup().getName());
+        out.put("categoryId", ticket.getCategory() == null ? null : ticket.getCategory().getId());
+        out.put("categoryName", ticket.getCategory() == null ? null : ticket.getCategory().getName());
         return out;
     }
 

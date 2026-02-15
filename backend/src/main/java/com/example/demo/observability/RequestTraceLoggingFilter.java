@@ -11,6 +11,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
+import java.util.Set;
 import java.util.UUID;
 
 @Component
@@ -19,6 +20,11 @@ public class RequestTraceLoggingFilter extends OncePerRequestFilter {
     private static final Logger log = LoggerFactory.getLogger(RequestTraceLoggingFilter.class);
     private static final String TRACE_ID_HEADER = "X-Trace-Id";
     private static final String TRACE_ID_MDC_KEY = "traceId";
+    private static final Set<String> SENSITIVE_QUERY_KEYS = Set.of(
+            "token",
+            "access_token",
+            "authorization"
+    );
 
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
@@ -55,8 +61,25 @@ public class RequestTraceLoggingFilter extends OncePerRequestFilter {
 
     private String buildPathWithQuery(HttpServletRequest request) {
         String uri = request.getRequestURI();
-        String query = request.getQueryString();
+        String query = sanitizeQuery(request.getQueryString());
         return query == null || query.isBlank() ? uri : uri + "?" + query;
+    }
+
+    private String sanitizeQuery(String query) {
+        if (query == null || query.isBlank()) {
+            return query;
+        }
+        String[] pairs = query.split("&");
+        for (int i = 0; i < pairs.length; i++) {
+            String pair = pairs[i];
+            int separator = pair.indexOf('=');
+            String rawKey = separator >= 0 ? pair.substring(0, separator) : pair;
+            String normalizedKey = rawKey.trim().toLowerCase();
+            if (SENSITIVE_QUERY_KEYS.contains(normalizedKey)) {
+                pairs[i] = rawKey + "=REDACTED";
+            }
+        }
+        return String.join("&", pairs);
     }
 
     private String resolveClientIp(HttpServletRequest request) {

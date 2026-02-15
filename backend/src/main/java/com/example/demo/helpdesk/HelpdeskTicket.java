@@ -64,6 +64,10 @@ public class HelpdeskTicket {
     @JoinColumn(name = "group_id")
     private DepartmentGroup group;
 
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "category_id", nullable = false)
+    private HelpdeskCategory category;
+
     @Column(nullable = false)
     private boolean supervisorApproved;
 
@@ -87,6 +91,7 @@ public class HelpdeskTicket {
 
     public HelpdeskTicket(String name, String email, String subject, String description, Long createdByMemberId,
                           DepartmentGroup group,
+                          HelpdeskCategory category,
                           HelpdeskTicketPriority priority) {
         this.name = name;
         this.email = email;
@@ -94,6 +99,7 @@ public class HelpdeskTicket {
         this.description = description;
         this.createdByMemberId = createdByMemberId;
         this.group = group;
+        this.category = category;
         this.status = HelpdeskTicketStatus.OPEN;
         this.priority = priority == null ? HelpdeskTicketPriority.GENERAL : priority;
         this.supervisorApproved = this.priority == HelpdeskTicketPriority.GENERAL;
@@ -165,6 +171,10 @@ public class HelpdeskTicket {
 
     public boolean isSupervisorApproved() {
         return supervisorApproved;
+    }
+
+    public HelpdeskCategory getCategory() {
+        return category;
     }
 
     public Long getSupervisorApprovedByMemberId() {

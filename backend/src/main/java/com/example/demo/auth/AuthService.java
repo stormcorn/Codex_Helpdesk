@@ -8,8 +8,12 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 import com.example.demo.email.EmailNotificationService;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 import static org.springframework.http.HttpStatus.*;
@@ -18,6 +22,7 @@ import static org.springframework.http.HttpStatus.*;
 public class AuthService {
 
     private static final PasswordEncoder PASSWORD_ENCODER = new BCryptPasswordEncoder();
+    private static final String TOKEN_HASH_ALGORITHM = "SHA-256";
 
     private final MemberRepository memberRepository;
     private final AuthTokenRepository tokenRepository;
@@ -90,13 +95,13 @@ public class AuthService {
 
     @Transactional
     public void logout(String token) {
-        tokenRepository.findByToken(token).ifPresent(tokenRepository::delete);
+        findAuthToken(token).ifPresent(tokenRepository::delete);
     }
 
     @Transactional(readOnly = true)
     public Member requireMember(String authorizationHeader) {
         String token = extractBearerToken(authorizationHeader);
-        AuthToken authToken = tokenRepository.findByToken(token)
+        AuthToken authToken = findAuthToken(token)
                 .orElseThrow(() -> new ResponseStatusException(UNAUTHORIZED, "Unauthorized"));
 
         if (authToken.isExpired()) {
@@ -181,10 +186,34 @@ public class AuthService {
     private AuthResult createToken(Member member) {
         cleanupExpiredTokens();
         String tokenValue = UUID.randomUUID().toString().replace("-", "") + UUID.randomUUID().toString().replace("-", "");
-        AuthToken authToken = new AuthToken(tokenValue, member, LocalDateTime.now().plusHours(tokenHours));
+        AuthToken authToken = new AuthToken(hashToken(tokenValue), member, LocalDateTime.now().plusHours(tokenHours));
         tokenRepository.save(authToken);
 
         return new AuthResult(tokenValue, toMemberProfile(member));
+    }
+
+    private Optional<AuthToken> findAuthToken(String rawToken) {
+        String hashed = hashToken(rawToken);
+        Optional<AuthToken> hashedToken = tokenRepository.findByToken(hashed);
+        if (hashedToken.isPresent()) {
+            return hashedToken;
+        }
+        // Compatibility path for old plaintext tokens that may still exist.
+        return tokenRepository.findByToken(rawToken);
+    }
+
+    private String hashToken(String rawToken) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance(TOKEN_HASH_ALGORITHM);
+            byte[] hashedBytes = digest.digest(rawToken.getBytes(StandardCharsets.UTF_8));
+            StringBuilder sb = new StringBuilder(hashedBytes.length * 2);
+            for (byte hashedByte : hashedBytes) {
+                sb.append(String.format("%02x", hashedByte));
+            }
+            return sb.toString();
+        } catch (NoSuchAlgorithmException ex) {
+            throw new IllegalStateException("Missing token hash algorithm", ex);
+        }
     }
 
     public MemberProfile toMemberProfile(Member member) {

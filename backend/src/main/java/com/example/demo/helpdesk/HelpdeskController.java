@@ -2,6 +2,8 @@ package com.example.demo.helpdesk;
 
 import com.example.demo.auth.AuthService;
 import com.example.demo.auth.Member;
+import org.springframework.http.ContentDisposition;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -20,6 +22,7 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.time.LocalDateTime;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 
 @RestController
@@ -43,6 +46,7 @@ public class HelpdeskController {
             @RequestParam String subject,
             @RequestParam String description,
             @RequestParam(value = "groupId", required = false) Long groupId,
+            @RequestParam(value = "categoryId", required = false) Long categoryId,
             @RequestParam(value = "priority", required = false) String priority,
             @RequestParam(value = "files", required = false) List<MultipartFile> files
     ) {
@@ -59,6 +63,7 @@ public class HelpdeskController {
                 subject,
                 description,
                 groupId,
+                categoryId,
                 ticketPriority,
                 files == null ? List.of() : files
         );
@@ -128,28 +133,32 @@ public class HelpdeskController {
     @GetMapping("/{ticketId}/attachments/{attachmentId}/download")
     public ResponseEntity<Resource> download(
             @RequestHeader(value = "Authorization", required = false) String authorization,
-            @RequestParam(value = "token", required = false) String token,
             @PathVariable Long ticketId,
             @PathVariable Long attachmentId
     ) {
-        authService.requireMember(resolveAuthorization(authorization, token));
+        authService.requireMember(authorization);
         HelpdeskTicketService.AttachmentDownload file = service.getAttachment(ticketId, attachmentId);
         Resource resource = new FileSystemResource(file.path());
 
         return ResponseEntity.ok()
                 .contentType(MediaType.parseMediaType(file.contentType()))
-                .header("Content-Disposition", "attachment; filename=\"" + file.originalFilename() + "\"")
+                .header(
+                        HttpHeaders.CONTENT_DISPOSITION,
+                        ContentDisposition.attachment()
+                                .filename(file.originalFilename(), StandardCharsets.UTF_8)
+                                .build()
+                                .toString()
+                )
                 .body(resource);
     }
 
     @GetMapping("/{ticketId}/attachments/{attachmentId}/view")
     public ResponseEntity<Resource> view(
             @RequestHeader(value = "Authorization", required = false) String authorization,
-            @RequestParam(value = "token", required = false) String token,
             @PathVariable Long ticketId,
             @PathVariable Long attachmentId
     ) {
-        authService.requireMember(resolveAuthorization(authorization, token));
+        authService.requireMember(authorization);
         HelpdeskTicketService.AttachmentDownload file = service.getAttachment(ticketId, attachmentId);
         Resource resource = new FileSystemResource(file.path());
 
@@ -173,19 +182,10 @@ public class HelpdeskController {
         }
     }
 
-    private String resolveAuthorization(String authorization, String token) {
-        if (authorization != null && !authorization.isBlank()) {
-            return authorization;
-        }
-        if (token != null && !token.isBlank()) {
-            return "Bearer " + token;
-        }
-        return null;
-    }
-
     public record TicketResponse(Long id, String name, String email, String subject, String description, String status,
                                  String priority, boolean supervisorApproved, Long supervisorApprovedByMemberId,
                                  LocalDateTime supervisorApprovedAt, Long groupId, String groupName,
+                                 Long categoryId, String categoryName,
                                  Long createdByMemberId, boolean deleted,
                                  LocalDateTime deletedAt, LocalDateTime createdAt,
                                  List<AttachmentResponse> attachments,
@@ -205,6 +205,8 @@ public class HelpdeskController {
                     ticket.getSupervisorApprovedAt(),
                     ticket.getGroup() == null ? null : ticket.getGroup().getId(),
                     ticket.getGroup() == null ? null : ticket.getGroup().getName(),
+                    ticket.getCategory() == null ? null : ticket.getCategory().getId(),
+                    ticket.getCategory() == null ? null : ticket.getCategory().getName(),
                     ticket.getCreatedByMemberId(),
                     ticket.isDeleted(),
                     ticket.getDeletedAt(),

@@ -16,7 +16,8 @@ const ticketForm = reactive({
     subject: '',
     description: '',
     priority: 'GENERAL',
-    groupId: null
+    groupId: null,
+    categoryId: null
 });
 const selectedFiles = ref([]);
 const submittingTicket = ref(false);
@@ -28,10 +29,15 @@ const ticketKeyword = ref('');
 const onlyMyTickets = ref(false);
 const createdTimeSort = ref('newest');
 const statusFilter = ref('ALL');
+const archiveStatusFilter = ref('ALL');
 const members = ref([]);
 const loadingMembers = ref(false);
 const membersFeedback = ref('');
 const myGroups = ref([]);
+const helpdeskCategories = ref([]);
+const adminHelpdeskCategories = ref([]);
+const categoryFeedback = ref('');
+const createCategoryName = ref('');
 const adminGroups = ref([]);
 const loadingGroups = ref(false);
 const groupsFeedback = ref('');
@@ -64,6 +70,7 @@ const ticketHighlightTimers = reactive({});
 const lightboxOpen = ref(false);
 const lightboxSrc = ref('');
 const lightboxTitle = ref('');
+let lightboxObjectUrl = null;
 const notifications = ref([]);
 const unreadCount = ref(0);
 const notificationsOpen = ref(false);
@@ -109,14 +116,11 @@ const ticketStats = computed(() => {
     const todayNew = tickets.value.filter((t) => isToday(t.createdAt)).length;
     return { total, open, proceeding, pending, closed, deleted, todayNew };
 });
-const filteredTickets = computed(() => {
+const baseFilteredTickets = computed(() => {
     const keyword = ticketKeyword.value.trim().toLowerCase();
     const memberId = currentMember.value?.id ?? null;
     return [...tickets.value]
         .filter((ticket) => {
-        if (statusFilter.value !== 'ALL' && effectiveStatus(ticket) !== statusFilter.value) {
-            return false;
-        }
         if (onlyMyTickets.value && (!memberId || ticket.createdByMemberId !== memberId)) {
             return false;
         }
@@ -129,6 +133,7 @@ const filteredTickets = computed(() => {
             ticket.name,
             ticket.email,
             ticket.groupName ?? '',
+            ticket.categoryName ?? '',
             ticket.priority,
             effectiveStatus(ticket)
         ]
@@ -141,6 +146,22 @@ const filteredTickets = computed(() => {
         return createdTimeSort.value === 'newest' ? diff : -diff;
     });
 });
+const filteredActiveTickets = computed(() => baseFilteredTickets.value.filter((ticket) => {
+    const status = effectiveStatus(ticket);
+    if (status === 'CLOSED' || status === 'DELETED')
+        return false;
+    if (statusFilter.value === 'ALL')
+        return true;
+    return status === statusFilter.value;
+}));
+const filteredArchivedTickets = computed(() => baseFilteredTickets.value.filter((ticket) => {
+    const status = effectiveStatus(ticket);
+    if (status !== 'CLOSED' && status !== 'DELETED')
+        return false;
+    if (archiveStatusFilter.value === 'ALL')
+        return true;
+    return status === archiveStatusFilter.value;
+}));
 function authHeaders() {
     return { Authorization: `Bearer ${token.value}` };
 }
@@ -161,6 +182,8 @@ function normalizeTicket(ticket) {
         supervisorApprovedAt: ticket.supervisorApprovedAt ?? null,
         groupId: ticket.groupId ?? null,
         groupName: ticket.groupName ?? null,
+        categoryId: ticket.categoryId ?? null,
+        categoryName: ticket.categoryName ?? null,
         statusHistories: Array.isArray(ticket.statusHistories) ? ticket.statusHistories : []
     };
 }
@@ -208,21 +231,76 @@ async function requestJson(url, init, fallback) {
     }
     return (await response.json());
 }
-function attachmentViewUrl(ticketId, attachmentId) {
-    return `/api/helpdesk/tickets/${ticketId}/attachments/${attachmentId}/view?token=${encodeURIComponent(token.value)}`;
-}
-function attachmentDownloadUrl(ticketId, attachmentId) {
-    return `/api/helpdesk/tickets/${ticketId}/attachments/${attachmentId}/download?token=${encodeURIComponent(token.value)}`;
-}
 function isImageAttachment(attachment) {
     return attachment.contentType.startsWith('image/');
 }
-function openImageLightbox(ticketId, attachment) {
-    lightboxSrc.value = attachmentViewUrl(ticketId, attachment.id);
-    lightboxTitle.value = attachment.originalFilename;
-    lightboxOpen.value = true;
+function extractFilenameFromDisposition(disposition) {
+    if (!disposition)
+        return null;
+    const utf8Match = disposition.match(/filename\*=UTF-8''([^;]+)/i);
+    if (utf8Match?.[1]) {
+        try {
+            return decodeURIComponent(utf8Match[1]);
+        }
+        catch {
+            // ignore decode issue
+        }
+    }
+    const plainMatch = disposition.match(/filename="([^"]+)"/i);
+    return plainMatch?.[1] ?? null;
+}
+async function fetchAttachmentBlob(ticketId, attachmentId, action) {
+    const response = await fetch(`/api/helpdesk/tickets/${ticketId}/attachments/${attachmentId}/${action}`, {
+        headers: authHeaders()
+    });
+    if (!response.ok) {
+        let parsed = null;
+        try {
+            parsed = await response.json();
+        }
+        catch {
+            // ignore
+        }
+        throw new Error(parseErrorMessage('讀取附件失敗', parsed));
+    }
+    const blob = await response.blob();
+    const filename = extractFilenameFromDisposition(response.headers.get('Content-Disposition')) ?? `attachment-${attachmentId}`;
+    return { blob, filename };
+}
+async function openImageLightbox(ticketId, attachment) {
+    try {
+        const { blob } = await fetchAttachmentBlob(ticketId, attachment.id, 'view');
+        if (lightboxObjectUrl) {
+            URL.revokeObjectURL(lightboxObjectUrl);
+        }
+        lightboxObjectUrl = URL.createObjectURL(blob);
+        lightboxSrc.value = lightboxObjectUrl;
+        lightboxTitle.value = attachment.originalFilename;
+        lightboxOpen.value = true;
+    }
+    catch (e) {
+        itFeedback.value = e instanceof Error ? e.message : '讀取附件失敗';
+    }
+}
+async function downloadAttachment(ticketId, attachment) {
+    try {
+        const { blob, filename } = await fetchAttachmentBlob(ticketId, attachment.id, 'download');
+        const objectUrl = URL.createObjectURL(blob);
+        const anchor = document.createElement('a');
+        anchor.href = objectUrl;
+        anchor.download = filename || attachment.originalFilename;
+        anchor.click();
+        URL.revokeObjectURL(objectUrl);
+    }
+    catch (e) {
+        itFeedback.value = e instanceof Error ? e.message : '下載附件失敗';
+    }
 }
 function closeLightbox() {
+    if (lightboxObjectUrl) {
+        URL.revokeObjectURL(lightboxObjectUrl);
+        lightboxObjectUrl = null;
+    }
     lightboxOpen.value = false;
     lightboxSrc.value = '';
     lightboxTitle.value = '';
@@ -252,10 +330,11 @@ function prevRegisterStep() {
 function applyAuth(newToken, member) {
     token.value = newToken;
     currentMember.value = member;
-    localStorage.setItem(TOKEN_KEY, newToken);
+    sessionStorage.setItem(TOKEN_KEY, newToken);
     ticketForm.name = member.name;
     ticketForm.email = member.email;
     ticketForm.groupId = null;
+    ticketForm.categoryId = null;
 }
 async function login() {
     authError.value = '';
@@ -288,7 +367,7 @@ async function register() {
     }
 }
 async function restoreSession() {
-    const saved = localStorage.getItem(TOKEN_KEY);
+    const saved = sessionStorage.getItem(TOKEN_KEY);
     if (!saved)
         return;
     token.value = saved;
@@ -305,6 +384,7 @@ async function restoreSession() {
 }
 async function afterLoginLoad() {
     await loadMyGroups();
+    await loadHelpdeskCategories();
     await loadTickets();
     await loadNotifications();
     startNotificationPolling();
@@ -312,6 +392,7 @@ async function afterLoginLoad() {
         dashboardTab.value = 'members';
         await loadMembers();
         await loadAdminGroups();
+        await loadAdminHelpdeskCategories();
         await loadAuditLogs();
     }
     else if (isItOrAdmin.value) {
@@ -334,12 +415,17 @@ async function logout() {
 function clearSession() {
     stopNotificationPolling();
     clearTicketHighlights();
+    closeLightbox();
     token.value = '';
     currentMember.value = null;
-    localStorage.removeItem(TOKEN_KEY);
+    sessionStorage.removeItem(TOKEN_KEY);
     tickets.value = [];
     members.value = [];
     myGroups.value = [];
+    helpdeskCategories.value = [];
+    adminHelpdeskCategories.value = [];
+    createCategoryName.value = '';
+    categoryFeedback.value = '';
     adminGroups.value = [];
     createGroupName.value = '';
     groupAssignForm.groupId = null;
@@ -353,6 +439,7 @@ function clearSession() {
     ticketForm.name = '';
     ticketForm.email = '';
     ticketForm.groupId = null;
+    ticketForm.categoryId = null;
     ticketForm.priority = 'GENERAL';
 }
 async function loadMyGroups() {
@@ -372,6 +459,25 @@ async function loadMyGroups() {
     catch {
         myGroups.value = [];
         ticketForm.groupId = null;
+    }
+}
+async function loadHelpdeskCategories() {
+    if (!token.value)
+        return;
+    try {
+        helpdeskCategories.value = await requestJson('/api/helpdesk/categories', { headers: authHeaders() }, '讀取分類失敗');
+        if (!helpdeskCategories.value.length) {
+            ticketForm.categoryId = null;
+            return;
+        }
+        const currentCategoryStillValid = helpdeskCategories.value.some((c) => c.id === ticketForm.categoryId);
+        if (!currentCategoryStillValid) {
+            ticketForm.categoryId = helpdeskCategories.value[0].id;
+        }
+    }
+    catch {
+        helpdeskCategories.value = [];
+        ticketForm.categoryId = null;
     }
 }
 function clearTicketHighlights() {
@@ -445,6 +551,11 @@ async function submitTicket() {
         ticketFeedbackType.value = 'error';
         return;
     }
+    if (!ticketForm.categoryId) {
+        ticketFeedback.value = '請選擇工單分類。';
+        ticketFeedbackType.value = 'error';
+        return;
+    }
     const oversized = selectedFiles.value.find((f) => f.size >= MAX_FILE_BYTES);
     if (oversized) {
         ticketFeedback.value = `檔案 ${oversized.name} 超過 5MB 限制。`;
@@ -459,6 +570,7 @@ async function submitTicket() {
         formData.append('subject', ticketForm.subject);
         formData.append('description', ticketForm.description);
         formData.append('groupId', String(ticketForm.groupId));
+        formData.append('categoryId', String(ticketForm.categoryId));
         formData.append('priority', ticketForm.priority);
         selectedFiles.value.forEach((f) => formData.append('files', f));
         const response = await fetch('/api/helpdesk/tickets', { method: 'POST', headers: authHeaders(), body: formData });
@@ -484,6 +596,9 @@ async function submitTicket() {
         ticketForm.priority = 'GENERAL';
         if (!ticketForm.groupId && myGroups.value.length) {
             ticketForm.groupId = myGroups.value[0].id;
+        }
+        if (!ticketForm.categoryId && helpdeskCategories.value.length) {
+            ticketForm.categoryId = helpdeskCategories.value[0].id;
         }
     }
     catch (e) {
@@ -611,8 +726,10 @@ async function openNotification(item) {
         await markNotificationRead(item.id);
     }
     if (item.ticketId) {
-        dashboardTab.value = isItOrAdmin.value ? 'itdesk' : 'helpdesk';
         await loadTickets();
+        const targetTicket = tickets.value.find((t) => t.id === item.ticketId);
+        const archived = targetTicket ? ['CLOSED', 'DELETED'].includes(effectiveStatus(targetTicket)) : false;
+        dashboardTab.value = archived ? 'archive' : isItOrAdmin.value ? 'itdesk' : 'helpdesk';
         openTicketIds[item.ticketId] = true;
         window.setTimeout(() => {
             const target = document.getElementById(`ticket-${item.ticketId}`);
@@ -704,6 +821,40 @@ async function loadAdminGroups() {
     }
     finally {
         loadingGroups.value = false;
+    }
+}
+async function loadAdminHelpdeskCategories() {
+    if (!isAdmin.value)
+        return;
+    categoryFeedback.value = '';
+    try {
+        adminHelpdeskCategories.value = await requestJson('/api/admin/helpdesk-categories', { headers: authHeaders() }, '讀取分類失敗');
+    }
+    catch (e) {
+        categoryFeedback.value = e instanceof Error ? e.message : '讀取分類失敗';
+    }
+}
+async function createHelpdeskCategory() {
+    if (!isAdmin.value)
+        return;
+    const name = createCategoryName.value.trim();
+    if (!name) {
+        categoryFeedback.value = '請輸入分類名稱。';
+        return;
+    }
+    categoryFeedback.value = '';
+    try {
+        await requestJson('/api/admin/helpdesk-categories', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...authHeaders() },
+            body: JSON.stringify({ name })
+        }, '建立分類失敗');
+        createCategoryName.value = '';
+        await loadAdminHelpdeskCategories();
+        await loadHelpdeskCategories();
+    }
+    catch (e) {
+        categoryFeedback.value = e instanceof Error ? e.message : '建立分類失敗';
     }
 }
 async function createAdminGroup() {
@@ -935,6 +1086,7 @@ onMounted(async () => {
     await restoreSession();
 });
 onBeforeUnmount(() => {
+    closeLightbox();
     stopNotificationPolling();
     clearTicketHighlights();
 });
@@ -1187,6 +1339,14 @@ else {
             ...{ class: ({ active: __VLS_ctx.dashboardTab === 'itdesk' }) },
         });
     }
+    __VLS_asFunctionalElement(__VLS_intrinsicElements.button, __VLS_intrinsicElements.button)({
+        ...{ onClick: (...[$event]) => {
+                if (!!(!__VLS_ctx.isAuthenticated))
+                    return;
+                __VLS_ctx.dashboardTab = 'archive';
+            } },
+        ...{ class: ({ active: __VLS_ctx.dashboardTab === 'archive' }) },
+    });
     if (__VLS_ctx.isAdmin) {
         __VLS_asFunctionalElement(__VLS_intrinsicElements.button, __VLS_intrinsicElements.button)({
             ...{ onClick: (...[$event]) => {
@@ -1197,6 +1357,7 @@ else {
                     __VLS_ctx.dashboardTab = 'members';
                     __VLS_ctx.loadMembers();
                     __VLS_ctx.loadAdminGroups();
+                    __VLS_ctx.loadAdminHelpdeskCategories();
                     __VLS_ctx.loadAuditLogs();
                 } },
             ...{ class: ({ active: __VLS_ctx.dashboardTab === 'members' }) },
@@ -1237,6 +1398,22 @@ else {
                 value: (g.id),
             });
             (g.name);
+        }
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.label, __VLS_intrinsicElements.label)({});
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.select, __VLS_intrinsicElements.select)({
+            value: (__VLS_ctx.ticketForm.categoryId),
+            required: true,
+        });
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.option, __VLS_intrinsicElements.option)({
+            value: (null),
+            disabled: true,
+        });
+        for (const [c] of __VLS_getVForSourceType((__VLS_ctx.helpdeskCategories))) {
+            __VLS_asFunctionalElement(__VLS_intrinsicElements.option, __VLS_intrinsicElements.option)({
+                key: (c.id),
+                value: (c.id),
+            });
+            (c.name);
         }
         __VLS_asFunctionalElement(__VLS_intrinsicElements.label, __VLS_intrinsicElements.label)({});
         __VLS_asFunctionalElement(__VLS_intrinsicElements.input)({
@@ -1375,26 +1552,20 @@ else {
         __VLS_asFunctionalElement(__VLS_intrinsicElements.option, __VLS_intrinsicElements.option)({
             value: "PENDING",
         });
-        __VLS_asFunctionalElement(__VLS_intrinsicElements.option, __VLS_intrinsicElements.option)({
-            value: "CLOSED",
-        });
-        __VLS_asFunctionalElement(__VLS_intrinsicElements.option, __VLS_intrinsicElements.option)({
-            value: "DELETED",
-        });
         __VLS_asFunctionalElement(__VLS_intrinsicElements.small, __VLS_intrinsicElements.small)({});
-        (__VLS_ctx.filteredTickets.length);
+        (__VLS_ctx.filteredActiveTickets.length);
         (__VLS_ctx.tickets.length);
         if (__VLS_ctx.loadingTickets) {
             __VLS_asFunctionalElement(__VLS_intrinsicElements.p, __VLS_intrinsicElements.p)({});
         }
-        else if (!__VLS_ctx.filteredTickets.length) {
+        else if (!__VLS_ctx.filteredActiveTickets.length) {
             __VLS_asFunctionalElement(__VLS_intrinsicElements.p, __VLS_intrinsicElements.p)({});
         }
         else {
             __VLS_asFunctionalElement(__VLS_intrinsicElements.ul, __VLS_intrinsicElements.ul)({
                 ...{ class: "ticket-list" },
             });
-            for (const [ticket] of __VLS_getVForSourceType((__VLS_ctx.filteredTickets))) {
+            for (const [ticket] of __VLS_getVForSourceType((__VLS_ctx.filteredActiveTickets))) {
                 __VLS_asFunctionalElement(__VLS_intrinsicElements.li, __VLS_intrinsicElements.li)({
                     id: (`ticket-${ticket.id}`),
                     key: (ticket.id),
@@ -1419,7 +1590,7 @@ else {
                                 return;
                             if (!!(__VLS_ctx.loadingTickets))
                                 return;
-                            if (!!(!__VLS_ctx.filteredTickets.length))
+                            if (!!(!__VLS_ctx.filteredActiveTickets.length))
                                 return;
                             __VLS_ctx.toggleTicket(ticket.id);
                         } },
@@ -1440,6 +1611,9 @@ else {
                 (new Date(ticket.createdAt).toLocaleString());
                 if (ticket.groupName) {
                     (ticket.groupName);
+                }
+                if (ticket.categoryName) {
+                    (ticket.categoryName);
                 }
                 __VLS_asFunctionalElement(__VLS_intrinsicElements.span, __VLS_intrinsicElements.span)({
                     ...{ class: (['priority-tag', `priority-${ticket.priority.toLowerCase()}`]) },
@@ -1466,7 +1640,7 @@ else {
                                     return;
                                 if (!!(__VLS_ctx.loadingTickets))
                                     return;
-                                if (!!(!__VLS_ctx.filteredTickets.length))
+                                if (!!(!__VLS_ctx.filteredActiveTickets.length))
                                     return;
                                 if (!(__VLS_ctx.canSupervisorApprove(ticket)))
                                     return;
@@ -1486,7 +1660,7 @@ else {
                                     return;
                                 if (!!(__VLS_ctx.loadingTickets))
                                     return;
-                                if (!!(!__VLS_ctx.filteredTickets.length))
+                                if (!!(!__VLS_ctx.filteredActiveTickets.length))
                                     return;
                                 if (!(__VLS_ctx.canDeleteTicket(ticket)))
                                     return;
@@ -1512,7 +1686,7 @@ else {
                                     return;
                                 if (!!(__VLS_ctx.loadingTickets))
                                     return;
-                                if (!!(!__VLS_ctx.filteredTickets.length))
+                                if (!!(!__VLS_ctx.filteredActiveTickets.length))
                                     return;
                                 if (!(__VLS_ctx.isItOrAdmin && !__VLS_ctx.isTicketDeleted(ticket)))
                                     return;
@@ -1582,7 +1756,7 @@ else {
                                                 return;
                                             if (!!(__VLS_ctx.loadingTickets))
                                                 return;
-                                            if (!!(!__VLS_ctx.filteredTickets.length))
+                                            if (!!(!__VLS_ctx.filteredActiveTickets.length))
                                                 return;
                                             if (!(__VLS_ctx.openTicketIds[ticket.id]))
                                                 return;
@@ -1598,10 +1772,26 @@ else {
                                 (att.originalFilename);
                             }
                             else {
-                                __VLS_asFunctionalElement(__VLS_intrinsicElements.a, __VLS_intrinsicElements.a)({
-                                    href: (__VLS_ctx.attachmentDownloadUrl(ticket.id, att.id)),
-                                    target: "_blank",
-                                    rel: "noopener",
+                                __VLS_asFunctionalElement(__VLS_intrinsicElements.button, __VLS_intrinsicElements.button)({
+                                    ...{ onClick: (...[$event]) => {
+                                            if (!!(!__VLS_ctx.isAuthenticated))
+                                                return;
+                                            if (!(__VLS_ctx.dashboardTab === 'itdesk' || __VLS_ctx.dashboardTab === 'helpdesk'))
+                                                return;
+                                            if (!!(__VLS_ctx.loadingTickets))
+                                                return;
+                                            if (!!(!__VLS_ctx.filteredActiveTickets.length))
+                                                return;
+                                            if (!(__VLS_ctx.openTicketIds[ticket.id]))
+                                                return;
+                                            if (!(ticket.attachments.length))
+                                                return;
+                                            if (!!(__VLS_ctx.isImageAttachment(att)))
+                                                return;
+                                            __VLS_ctx.downloadAttachment(ticket.id, att);
+                                        } },
+                                    ...{ class: "link-button" },
+                                    type: "button",
                                 });
                                 (att.originalFilename);
                             }
@@ -1671,7 +1861,7 @@ else {
                                         return;
                                     if (!!(__VLS_ctx.loadingTickets))
                                         return;
-                                    if (!!(!__VLS_ctx.filteredTickets.length))
+                                    if (!!(!__VLS_ctx.filteredActiveTickets.length))
                                         return;
                                     if (!(__VLS_ctx.openTicketIds[ticket.id]))
                                         return;
@@ -1691,6 +1881,265 @@ else {
                 ...{ class: "feedback error" },
             });
             (__VLS_ctx.itFeedback);
+        }
+    }
+    if (__VLS_ctx.dashboardTab === 'archive') {
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.section, __VLS_intrinsicElements.section)({
+            ...{ class: "panel" },
+        });
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
+            ...{ class: "ticket-list-top" },
+        });
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.h2, __VLS_intrinsicElements.h2)({});
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
+            ...{ class: "ticket-filters" },
+        });
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.label, __VLS_intrinsicElements.label)({});
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.input)({
+            placeholder: "工單編號 / 主旨 / 內容 / 建立人 / Email",
+        });
+        (__VLS_ctx.ticketKeyword);
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.label, __VLS_intrinsicElements.label)({});
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.input)({
+            type: "checkbox",
+        });
+        (__VLS_ctx.onlyMyTickets);
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.label, __VLS_intrinsicElements.label)({});
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.select, __VLS_intrinsicElements.select)({
+            value: (__VLS_ctx.createdTimeSort),
+        });
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.option, __VLS_intrinsicElements.option)({
+            value: "newest",
+        });
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.option, __VLS_intrinsicElements.option)({
+            value: "oldest",
+        });
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.label, __VLS_intrinsicElements.label)({});
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.select, __VLS_intrinsicElements.select)({
+            value: (__VLS_ctx.archiveStatusFilter),
+        });
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.option, __VLS_intrinsicElements.option)({
+            value: "ALL",
+        });
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.option, __VLS_intrinsicElements.option)({
+            value: "CLOSED",
+        });
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.option, __VLS_intrinsicElements.option)({
+            value: "DELETED",
+        });
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.small, __VLS_intrinsicElements.small)({});
+        (__VLS_ctx.filteredArchivedTickets.length);
+        (__VLS_ctx.tickets.length);
+        if (__VLS_ctx.loadingTickets) {
+            __VLS_asFunctionalElement(__VLS_intrinsicElements.p, __VLS_intrinsicElements.p)({});
+        }
+        else if (!__VLS_ctx.filteredArchivedTickets.length) {
+            __VLS_asFunctionalElement(__VLS_intrinsicElements.p, __VLS_intrinsicElements.p)({});
+        }
+        else {
+            __VLS_asFunctionalElement(__VLS_intrinsicElements.ul, __VLS_intrinsicElements.ul)({
+                ...{ class: "ticket-list" },
+            });
+            for (const [ticket] of __VLS_getVForSourceType((__VLS_ctx.filteredArchivedTickets))) {
+                __VLS_asFunctionalElement(__VLS_intrinsicElements.li, __VLS_intrinsicElements.li)({
+                    id: (`ticket-${ticket.id}`),
+                    key: (ticket.id),
+                    ...{ class: ([
+                            'ticket-card',
+                            `ticket-card-${__VLS_ctx.effectiveStatus(ticket).toLowerCase()}`,
+                            {
+                                expanded: __VLS_ctx.openTicketIds[ticket.id],
+                                'new-ticket-highlight': __VLS_ctx.newTicketHighlights[ticket.id],
+                                'jump-ticket-highlight': __VLS_ctx.jumpTicketHighlights[ticket.id]
+                            }
+                        ]) },
+                });
+                __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
+                    ...{ class: "ticket-head" },
+                });
+                __VLS_asFunctionalElement(__VLS_intrinsicElements.button, __VLS_intrinsicElements.button)({
+                    ...{ onClick: (...[$event]) => {
+                            if (!!(!__VLS_ctx.isAuthenticated))
+                                return;
+                            if (!(__VLS_ctx.dashboardTab === 'archive'))
+                                return;
+                            if (!!(__VLS_ctx.loadingTickets))
+                                return;
+                            if (!!(!__VLS_ctx.filteredArchivedTickets.length))
+                                return;
+                            __VLS_ctx.toggleTicket(ticket.id);
+                        } },
+                    ...{ class: "ticket-toggle" },
+                    type: "button",
+                });
+                __VLS_asFunctionalElement(__VLS_intrinsicElements.strong, __VLS_intrinsicElements.strong)({
+                    ...{ class: ({ 'deleted-title': __VLS_ctx.isTicketDeleted(ticket) }) },
+                });
+                (ticket.id);
+                (ticket.subject);
+                __VLS_asFunctionalElement(__VLS_intrinsicElements.small, __VLS_intrinsicElements.small)({});
+                (__VLS_ctx.openTicketIds[ticket.id] ? '收合' : '展開');
+                __VLS_asFunctionalElement(__VLS_intrinsicElements.small, __VLS_intrinsicElements.small)({
+                    ...{ class: (['ticket-meta', { 'deleted-meta': __VLS_ctx.isTicketDeleted(ticket) }]) },
+                });
+                (ticket.name);
+                (new Date(ticket.createdAt).toLocaleString());
+                if (ticket.groupName) {
+                    (ticket.groupName);
+                }
+                if (ticket.categoryName) {
+                    (ticket.categoryName);
+                }
+                __VLS_asFunctionalElement(__VLS_intrinsicElements.span, __VLS_intrinsicElements.span)({
+                    ...{ class: (['priority-tag', `priority-${ticket.priority.toLowerCase()}`]) },
+                });
+                (ticket.priority === 'URGENT' ? '急件' : '一般');
+                if (ticket.priority === 'URGENT') {
+                    __VLS_asFunctionalElement(__VLS_intrinsicElements.span, __VLS_intrinsicElements.span)({
+                        ...{ class: (['approval-tag', ticket.supervisorApproved ? 'approved' : 'pending']) },
+                    });
+                    (ticket.supervisorApproved ? '主管已確認' : '需主管確認');
+                }
+                if (__VLS_ctx.isTicketDeleted(ticket)) {
+                    __VLS_asFunctionalElement(__VLS_intrinsicElements.span, __VLS_intrinsicElements.span)({
+                        ...{ class: "deleted-badge" },
+                        'aria-label': "已刪除工單",
+                    });
+                }
+                __VLS_asFunctionalElement(__VLS_intrinsicElements.span, __VLS_intrinsicElements.span)({
+                    ...{ class: (['status-tag', `status-${__VLS_ctx.effectiveStatus(ticket).toLowerCase()}`]) },
+                });
+                (__VLS_ctx.displayStatus(ticket));
+                const __VLS_4 = {}.Transition;
+                /** @type {[typeof __VLS_components.Transition, typeof __VLS_components.Transition, ]} */ ;
+                // @ts-ignore
+                const __VLS_5 = __VLS_asFunctionalComponent(__VLS_4, new __VLS_4({
+                    name: "ticket-expand",
+                }));
+                const __VLS_6 = __VLS_5({
+                    name: "ticket-expand",
+                }, ...__VLS_functionalComponentArgsRest(__VLS_5));
+                __VLS_7.slots.default;
+                if (__VLS_ctx.openTicketIds[ticket.id]) {
+                    __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
+                        ...{ class: "ticket-content" },
+                    });
+                    __VLS_asFunctionalElement(__VLS_intrinsicElements.p, __VLS_intrinsicElements.p)({
+                        ...{ class: ({ 'deleted-content': __VLS_ctx.isTicketDeleted(ticket) }) },
+                    });
+                    (ticket.description);
+                    __VLS_asFunctionalElement(__VLS_intrinsicElements.small, __VLS_intrinsicElements.small)({});
+                    (ticket.email);
+                    if (ticket.deletedAt) {
+                        __VLS_asFunctionalElement(__VLS_intrinsicElements.small, __VLS_intrinsicElements.small)({});
+                        (new Date(ticket.deletedAt).toLocaleString());
+                    }
+                    if (ticket.attachments.length) {
+                        __VLS_asFunctionalElement(__VLS_intrinsicElements.ul, __VLS_intrinsicElements.ul)({
+                            ...{ class: "simple-list" },
+                        });
+                        for (const [att] of __VLS_getVForSourceType((ticket.attachments))) {
+                            __VLS_asFunctionalElement(__VLS_intrinsicElements.li, __VLS_intrinsicElements.li)({
+                                key: (att.id),
+                            });
+                            if (__VLS_ctx.isImageAttachment(att)) {
+                                __VLS_asFunctionalElement(__VLS_intrinsicElements.button, __VLS_intrinsicElements.button)({
+                                    ...{ onClick: (...[$event]) => {
+                                            if (!!(!__VLS_ctx.isAuthenticated))
+                                                return;
+                                            if (!(__VLS_ctx.dashboardTab === 'archive'))
+                                                return;
+                                            if (!!(__VLS_ctx.loadingTickets))
+                                                return;
+                                            if (!!(!__VLS_ctx.filteredArchivedTickets.length))
+                                                return;
+                                            if (!(__VLS_ctx.openTicketIds[ticket.id]))
+                                                return;
+                                            if (!(ticket.attachments.length))
+                                                return;
+                                            if (!(__VLS_ctx.isImageAttachment(att)))
+                                                return;
+                                            __VLS_ctx.openImageLightbox(ticket.id, att);
+                                        } },
+                                    ...{ class: "link-button" },
+                                    type: "button",
+                                });
+                                (att.originalFilename);
+                            }
+                            else {
+                                __VLS_asFunctionalElement(__VLS_intrinsicElements.button, __VLS_intrinsicElements.button)({
+                                    ...{ onClick: (...[$event]) => {
+                                            if (!!(!__VLS_ctx.isAuthenticated))
+                                                return;
+                                            if (!(__VLS_ctx.dashboardTab === 'archive'))
+                                                return;
+                                            if (!!(__VLS_ctx.loadingTickets))
+                                                return;
+                                            if (!!(!__VLS_ctx.filteredArchivedTickets.length))
+                                                return;
+                                            if (!(__VLS_ctx.openTicketIds[ticket.id]))
+                                                return;
+                                            if (!(ticket.attachments.length))
+                                                return;
+                                            if (!!(__VLS_ctx.isImageAttachment(att)))
+                                                return;
+                                            __VLS_ctx.downloadAttachment(ticket.id, att);
+                                        } },
+                                    ...{ class: "link-button" },
+                                    type: "button",
+                                });
+                                (att.originalFilename);
+                            }
+                        }
+                    }
+                    __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
+                        ...{ class: "message-box" },
+                    });
+                    __VLS_asFunctionalElement(__VLS_intrinsicElements.h4, __VLS_intrinsicElements.h4)({});
+                    __VLS_asFunctionalElement(__VLS_intrinsicElements.ul, __VLS_intrinsicElements.ul)({
+                        ...{ class: "simple-list" },
+                    });
+                    for (const [msg] of __VLS_getVForSourceType((ticket.messages))) {
+                        __VLS_asFunctionalElement(__VLS_intrinsicElements.li, __VLS_intrinsicElements.li)({
+                            key: (msg.id),
+                        });
+                        __VLS_asFunctionalElement(__VLS_intrinsicElements.strong, __VLS_intrinsicElements.strong)({});
+                        (msg.authorRole);
+                        (msg.authorName);
+                        (msg.content);
+                        __VLS_asFunctionalElement(__VLS_intrinsicElements.small, __VLS_intrinsicElements.small)({});
+                        (new Date(msg.createdAt).toLocaleString());
+                    }
+                    __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
+                        ...{ class: "status-history-box" },
+                    });
+                    __VLS_asFunctionalElement(__VLS_intrinsicElements.h4, __VLS_intrinsicElements.h4)({});
+                    if (ticket.statusHistories.length) {
+                        __VLS_asFunctionalElement(__VLS_intrinsicElements.ul, __VLS_intrinsicElements.ul)({
+                            ...{ class: "simple-list status-history-list" },
+                        });
+                        for (const [history] of __VLS_getVForSourceType((ticket.statusHistories))) {
+                            __VLS_asFunctionalElement(__VLS_intrinsicElements.li, __VLS_intrinsicElements.li)({
+                                key: (history.id),
+                            });
+                            __VLS_asFunctionalElement(__VLS_intrinsicElements.span, __VLS_intrinsicElements.span)({
+                                ...{ class: (['status-tag', `status-${__VLS_ctx.normalizeStatus(history.toStatus).toLowerCase()}`]) },
+                            });
+                            (__VLS_ctx.normalizeStatus(history.toStatus));
+                            __VLS_asFunctionalElement(__VLS_intrinsicElements.small, __VLS_intrinsicElements.small)({});
+                            (__VLS_ctx.formatStatusTransition(history));
+                            (history.changedByRole);
+                            (history.changedByName);
+                            (history.changedByEmployeeId);
+                            (new Date(history.createdAt).toLocaleString());
+                        }
+                    }
+                    else {
+                        __VLS_asFunctionalElement(__VLS_intrinsicElements.small, __VLS_intrinsicElements.small)({});
+                    }
+                }
+                var __VLS_7;
+            }
         }
     }
     if (__VLS_ctx.dashboardTab === 'members') {
@@ -1913,6 +2362,41 @@ else {
             }
         }
         __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
+            ...{ class: "group-admin" },
+        });
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.h3, __VLS_intrinsicElements.h3)({});
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.p, __VLS_intrinsicElements.p)({
+            ...{ class: "subtitle" },
+        });
+        if (__VLS_ctx.categoryFeedback) {
+            __VLS_asFunctionalElement(__VLS_intrinsicElements.p, __VLS_intrinsicElements.p)({
+                ...{ class: "feedback error" },
+            });
+            (__VLS_ctx.categoryFeedback);
+        }
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
+            ...{ class: "row" },
+        });
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.input)({
+            placeholder: "新分類名稱",
+        });
+        (__VLS_ctx.createCategoryName);
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.button, __VLS_intrinsicElements.button)({
+            ...{ onClick: (__VLS_ctx.createHelpdeskCategory) },
+        });
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.ul, __VLS_intrinsicElements.ul)({
+            ...{ class: "simple-list" },
+        });
+        for (const [c] of __VLS_getVForSourceType((__VLS_ctx.adminHelpdeskCategories))) {
+            __VLS_asFunctionalElement(__VLS_intrinsicElements.li, __VLS_intrinsicElements.li)({
+                key: (c.id),
+            });
+            __VLS_asFunctionalElement(__VLS_intrinsicElements.strong, __VLS_intrinsicElements.strong)({});
+            (c.name);
+            __VLS_asFunctionalElement(__VLS_intrinsicElements.small, __VLS_intrinsicElements.small)({});
+            (new Date(c.createdAt).toLocaleString());
+        }
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
             ...{ class: "audit-admin" },
         });
         __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
@@ -2131,6 +2615,7 @@ else {
 /** @type {__VLS_StyleScopedClasses['ticket-content']} */ ;
 /** @type {__VLS_StyleScopedClasses['simple-list']} */ ;
 /** @type {__VLS_StyleScopedClasses['link-button']} */ ;
+/** @type {__VLS_StyleScopedClasses['link-button']} */ ;
 /** @type {__VLS_StyleScopedClasses['message-box']} */ ;
 /** @type {__VLS_StyleScopedClasses['simple-list']} */ ;
 /** @type {__VLS_StyleScopedClasses['status-history-box']} */ ;
@@ -2140,6 +2625,22 @@ else {
 /** @type {__VLS_StyleScopedClasses['row']} */ ;
 /** @type {__VLS_StyleScopedClasses['feedback']} */ ;
 /** @type {__VLS_StyleScopedClasses['error']} */ ;
+/** @type {__VLS_StyleScopedClasses['panel']} */ ;
+/** @type {__VLS_StyleScopedClasses['ticket-list-top']} */ ;
+/** @type {__VLS_StyleScopedClasses['ticket-filters']} */ ;
+/** @type {__VLS_StyleScopedClasses['ticket-list']} */ ;
+/** @type {__VLS_StyleScopedClasses['ticket-head']} */ ;
+/** @type {__VLS_StyleScopedClasses['ticket-toggle']} */ ;
+/** @type {__VLS_StyleScopedClasses['deleted-badge']} */ ;
+/** @type {__VLS_StyleScopedClasses['ticket-content']} */ ;
+/** @type {__VLS_StyleScopedClasses['simple-list']} */ ;
+/** @type {__VLS_StyleScopedClasses['link-button']} */ ;
+/** @type {__VLS_StyleScopedClasses['link-button']} */ ;
+/** @type {__VLS_StyleScopedClasses['message-box']} */ ;
+/** @type {__VLS_StyleScopedClasses['simple-list']} */ ;
+/** @type {__VLS_StyleScopedClasses['status-history-box']} */ ;
+/** @type {__VLS_StyleScopedClasses['simple-list']} */ ;
+/** @type {__VLS_StyleScopedClasses['status-history-list']} */ ;
 /** @type {__VLS_StyleScopedClasses['panel']} */ ;
 /** @type {__VLS_StyleScopedClasses['subtitle']} */ ;
 /** @type {__VLS_StyleScopedClasses['feedback']} */ ;
@@ -2162,6 +2663,12 @@ else {
 /** @type {__VLS_StyleScopedClasses['group-supervisor-chip']} */ ;
 /** @type {__VLS_StyleScopedClasses['row']} */ ;
 /** @type {__VLS_StyleScopedClasses['danger']} */ ;
+/** @type {__VLS_StyleScopedClasses['group-admin']} */ ;
+/** @type {__VLS_StyleScopedClasses['subtitle']} */ ;
+/** @type {__VLS_StyleScopedClasses['feedback']} */ ;
+/** @type {__VLS_StyleScopedClasses['error']} */ ;
+/** @type {__VLS_StyleScopedClasses['row']} */ ;
+/** @type {__VLS_StyleScopedClasses['simple-list']} */ ;
 /** @type {__VLS_StyleScopedClasses['audit-admin']} */ ;
 /** @type {__VLS_StyleScopedClasses['audit-head']} */ ;
 /** @type {__VLS_StyleScopedClasses['row']} */ ;
@@ -2202,10 +2709,15 @@ const __VLS_self = (await import('vue')).defineComponent({
             onlyMyTickets: onlyMyTickets,
             createdTimeSort: createdTimeSort,
             statusFilter: statusFilter,
+            archiveStatusFilter: archiveStatusFilter,
             members: members,
             loadingMembers: loadingMembers,
             membersFeedback: membersFeedback,
             myGroups: myGroups,
+            helpdeskCategories: helpdeskCategories,
+            adminHelpdeskCategories: adminHelpdeskCategories,
+            categoryFeedback: categoryFeedback,
+            createCategoryName: createCategoryName,
             adminGroups: adminGroups,
             loadingGroups: loadingGroups,
             groupsFeedback: groupsFeedback,
@@ -2241,13 +2753,14 @@ const __VLS_self = (await import('vue')).defineComponent({
             effectiveStatus: effectiveStatus,
             isTicketDeleted: isTicketDeleted,
             ticketStats: ticketStats,
-            filteredTickets: filteredTickets,
+            filteredActiveTickets: filteredActiveTickets,
+            filteredArchivedTickets: filteredArchivedTickets,
             formatSize: formatSize,
             displayStatus: displayStatus,
             formatStatusTransition: formatStatusTransition,
-            attachmentDownloadUrl: attachmentDownloadUrl,
             isImageAttachment: isImageAttachment,
             openImageLightbox: openImageLightbox,
+            downloadAttachment: downloadAttachment,
             closeLightbox: closeLightbox,
             nextRegisterStep: nextRegisterStep,
             prevRegisterStep: prevRegisterStep,
@@ -2267,6 +2780,8 @@ const __VLS_self = (await import('vue')).defineComponent({
             supervisorApproveTicket: supervisorApproveTicket,
             loadMembers: loadMembers,
             loadAdminGroups: loadAdminGroups,
+            loadAdminHelpdeskCategories: loadAdminHelpdeskCategories,
+            createHelpdeskCategory: createHelpdeskCategory,
             createAdminGroup: createAdminGroup,
             addMemberToGroup: addMemberToGroup,
             removeMemberFromGroup: removeMemberFromGroup,
