@@ -8,15 +8,13 @@ import org.springframework.context.annotation.Configuration;
 @Configuration
 public class AuthInitializer {
 
-    private static final String DEFAULT_ADMIN_PASSWORD = "Admin@12345";
-
     @Bean
     CommandLineRunner initAdmin(
             AuthService authService,
             @Value("${app.admin.employee-id:ADMIN001}") String adminEmployeeId,
             @Value("${app.admin.name:System Admin}") String adminName,
             @Value("${app.admin.email:admin@example.com}") String adminEmail,
-            @Value("${app.admin.password:Admin@12345}") String adminPassword
+            @Value("${app.admin.password:}") String adminPassword
     ) {
         return args -> {
             validateAdminPassword(adminPassword);
@@ -34,9 +32,12 @@ public class AuthInitializer {
             throw new IllegalStateException("APP_ADMIN_PASSWORD must be configured");
         }
         String trimmed = adminPassword.trim();
-        if (DEFAULT_ADMIN_PASSWORD.equals(trimmed)
-                || "changeme".equalsIgnoreCase(trimmed)) {
-            throw new IllegalStateException("APP_ADMIN_PASSWORD is using an insecure default value");
+        if ("changeme".equalsIgnoreCase(trimmed)
+                || "password".equalsIgnoreCase(trimmed)
+                || "admin".equalsIgnoreCase(trimmed)
+                || "admin123".equalsIgnoreCase(trimmed)
+                || "admin@12345".equalsIgnoreCase(trimmed)) {
+            throw new IllegalStateException("APP_ADMIN_PASSWORD is using a weak value");
         }
     }
 }

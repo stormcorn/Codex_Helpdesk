@@ -143,7 +143,7 @@ docker compose up -d --build
 啟動後：
 - 前端：`http://localhost:5173`
 - 後端：`http://localhost:8080`
-- PostgreSQL：`localhost:5432`（db: `fullstack`, user: `app`, password: `app`）
+- PostgreSQL：`localhost:5432`（db/user 依 `.env` 設定）
 
 停止服務：
 ```bash
@@ -160,7 +160,7 @@ docker compose down -v
 預設連線（可由環境變數覆蓋）：
 - URL：`jdbc:postgresql://localhost:5432/fullstack`
 - Username：`app`
-- Password：`app`
+- Password：由 `SPRING_DATASOURCE_PASSWORD` 設定（必填）
 
 ### 2. 啟動後端
 ```bash
@@ -175,12 +175,12 @@ npm install
 npm run dev
 ```
 
-## 預設管理員
-由環境變數初始化（預設）：
-- Employee ID：`ADMIN001`
-- Name：`System Admin`
-- Email：`admin@example.com`
-- Password：`Admin@12345`
+## 管理員初始化
+由環境變數初始化：
+- Employee ID：`APP_ADMIN_EMPLOYEE_ID`
+- Name：`APP_ADMIN_NAME`
+- Email：`APP_ADMIN_EMAIL`
+- Password：`APP_ADMIN_PASSWORD`（必填，請使用強密碼）
 
 建議上線前修改：
 - `APP_ADMIN_EMPLOYEE_ID`
