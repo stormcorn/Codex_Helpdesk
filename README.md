@@ -129,6 +129,10 @@
 - `backend`：後端 API（Spring Boot）
 - `docker-compose.yml`：一鍵啟動前後端與資料庫
 
+## 文件
+- `docs/CURRENT_ARCHITECTURE.md`：目前檔案與系統架構快照
+- `docs/REFRACTOR_REPORT_2026-02-17.md`：前後端重構報告（本次重構成果與驗證紀錄）
+
 ## 快速啟動（Docker Compose）
 在 `fullstack` 目錄：
 
