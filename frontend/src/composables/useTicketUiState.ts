@@ -6,7 +6,15 @@ type UseTicketUiStateOptions = {
 };
 
 export function useTicketUiState(options: UseTicketUiStateOptions) {
-  const ticketForm = reactive<TicketForm>({ name: '', email: '', subject: '', description: '' });
+  const ticketForm = reactive<TicketForm>({
+    name: '',
+    email: '',
+    subject: '',
+    description: '',
+    priority: 'GENERAL',
+    groupId: null,
+    categoryId: null
+  });
   const selectedFiles = ref<File[]>([]);
   const ticketFeedback = ref('');
   const ticketFeedbackType = ref<FeedbackType>('');
