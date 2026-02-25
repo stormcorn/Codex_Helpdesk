@@ -135,6 +135,69 @@
 - `docs/DEPLOY_RUNBOOK.md`：目前實務部署/回復手冊（ESXi + Portainer + Docker）
 - `docs/PORTAINER_WEBHOOK_CD.md`：Portainer Webhook 半自動部署（CD）設定說明
 
+## CI/CD 與正式部署流程（現行）
+### 流程定位
+- `CI`：GitHub Actions（自動）
+  - `backend`：`mvn test`
+  - `frontend`：`npm ci` + `npm run build`
+- `CD`：`SSH` 手動部署（正式採用）
+  - Remote 主機：`/opt/fullstack`
+  - 部署腳本：`scripts/deploy_helpdesk.sh`
+- `Portainer`：保留作為監看/查 logs/手動重啟工具，不作為主要部署入口
+
+注意：
+- GitHub 雲端 Actions 無法直接連到公司內網 Portainer（例如 `192.168.x.x`），因此 `Portainer Webhook CD` 目前不作為正式流程。
+- 請勿使用 Portainer 產生的 image-only stack（例如 `/data/compose/*/docker-compose.yml`）作為主要版本部署來源，否則可能只重建容器而未更新程式碼版本。
+
+### 正式流程（每次上版）
+1. 本機開發完成後，先在本機驗證（建議）
+   - `backend`: `mvn test`
+   - `frontend`: `npm run build`
+2. Push 到 GitHub `main`
+   - `git push origin main`
+3. 到 GitHub `Actions` 確認 `CI` workflow 綠燈
+4. SSH 到 remote 主機執行部署腳本
+   - `ssh <deploy-user>@<deploy-host>`
+   - `cd /opt/fullstack && ./scripts/deploy_helpdesk.sh`
+5. 驗證畫面與功能
+   - 前端頁面可開啟
+   - `API ready (HTTP 200)`
+   - 關鍵功能（例如分類管理、工單流程）正常
+
+### Remote 手動操作步驟（無腳本版）
+若需要手動逐步執行，使用以下指令：
+
+```bash
+ssh <deploy-user>@<deploy-host>
+cd /opt/fullstack
+git pull origin main
+docker compose -p helpdesk up -d --build --force-recreate backend frontend
+```
+
+部署後可用以下指令檢查：
+
+```bash
+docker compose -p helpdesk ps
+docker logs --tail 120 fullstack-backend
+docker logs --tail 80 fullstack-frontend
+curl -i --max-time 5 http://localhost:5173/api/hello
+```
+
+### Remote 一鍵部署腳本（推薦）
+- 路徑：`/opt/fullstack/scripts/deploy_helpdesk.sh`
+- 功能：
+  - `git pull origin main`
+  - 重建 `backend/frontend`
+  - 等待 `/api/hello` 回 `200`
+  - 輸出容器狀態、前端資產 hash、API 驗證結果
+
+執行方式：
+
+```bash
+cd /opt/fullstack
+./scripts/deploy_helpdesk.sh
+```
+
 ## 快速啟動（Docker Compose）
 在 `fullstack` 目錄：
 
