@@ -7,6 +7,8 @@ import java.util.List;
 import java.util.Optional;
 
 public interface HelpdeskTicketRepository extends JpaRepository<HelpdeskTicket, Long> {
+    boolean existsByCategory_Id(Long categoryId);
+
     @EntityGraph(attributePaths = {"attachments", "messages", "statusHistories", "group", "category"})
     List<HelpdeskTicket> findTop20ByOrderByCreatedAtDesc();
 

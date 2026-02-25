@@ -46,6 +46,8 @@ const emit = defineEmits<{
   setGroupSupervisor: [groupId: number, memberId: number];
   removeMemberFromGroup: [groupId: number, memberId: number];
   createHelpdeskCategory: [];
+  updateHelpdeskCategory: [categoryId: number, name: string];
+  deleteHelpdeskCategory: [categoryId: number];
   loadAuditLogs: [];
   exportAuditLogsCsv: [];
   purgeAuditLogs: [];
@@ -65,6 +67,17 @@ const auditCleanupDaysModel = computed({
   get: () => props.auditCleanupDays,
   set: (value: number) => emit('update:auditCleanupDays', value)
 });
+
+function editCategory(categoryId: number, currentName: string): void {
+  const nextName = window.prompt('輸入新的分類名稱', currentName);
+  if (nextName === null) return;
+  emit('updateHelpdeskCategory', categoryId, nextName);
+}
+
+function removeCategory(categoryId: number, categoryName: string): void {
+  if (!window.confirm(`確定刪除分類「${categoryName}」？`)) return;
+  emit('deleteHelpdeskCategory', categoryId);
+}
 </script>
 
 <template>
@@ -155,9 +168,15 @@ const auditCleanupDaysModel = computed({
       </div>
 
       <ul class="simple-list">
-        <li v-for="c in props.adminHelpdeskCategories" :key="c.id">
-          <strong>{{ c.name }}</strong>
-          <small> · 建立於 {{ new Date(c.createdAt).toLocaleString() }}</small>
+        <li v-for="c in props.adminHelpdeskCategories" :key="c.id" class="row">
+          <span>
+            <strong>{{ c.name }}</strong>
+            <small> · 建立於 {{ new Date(c.createdAt).toLocaleString() }}</small>
+          </span>
+          <span class="row">
+            <button type="button" @click="editCategory(c.id, c.name)">修改</button>
+            <button type="button" class="danger" @click="removeCategory(c.id, c.name)">刪除</button>
+          </span>
         </li>
       </ul>
     </div>

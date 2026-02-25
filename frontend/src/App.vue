@@ -180,6 +180,8 @@ const {
   loadAdminGroups,
   loadAdminHelpdeskCategories,
   createHelpdeskCategory,
+  updateHelpdeskCategory,
+  deleteHelpdeskCategory,
   createAdminGroup,
   addMemberToGroup,
   removeMemberFromGroup,
@@ -444,6 +446,8 @@ onBeforeUnmount(() => {
         @set-group-supervisor="setGroupSupervisor"
         @remove-member-from-group="removeMemberFromGroup"
         @create-helpdesk-category="createHelpdeskCategory"
+        @update-helpdesk-category="updateHelpdeskCategory"
+        @delete-helpdesk-category="deleteHelpdeskCategory"
         @load-audit-logs="loadAuditLogs"
         @export-audit-logs-csv="exportAuditLogsCsv"
         @purge-audit-logs="purgeAuditLogs"

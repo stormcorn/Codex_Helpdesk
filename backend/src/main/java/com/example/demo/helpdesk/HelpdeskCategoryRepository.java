@@ -6,6 +6,7 @@ import java.util.List;
 
 public interface HelpdeskCategoryRepository extends JpaRepository<HelpdeskCategory, Long> {
     boolean existsByNameIgnoreCase(String name);
+    boolean existsByNameIgnoreCaseAndIdNot(String name, Long id);
 
     List<HelpdeskCategory> findAllByOrderByNameAsc();
 }

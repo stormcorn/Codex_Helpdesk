@@ -20,15 +20,18 @@ import static org.springframework.http.HttpStatus.NOT_FOUND;
 public class HelpdeskCategoryService {
 
     private final HelpdeskCategoryRepository categoryRepository;
+    private final HelpdeskTicketRepository ticketRepository;
     private final AuditLogService auditLogService;
     private final ObjectMapper objectMapper;
 
     public HelpdeskCategoryService(
             HelpdeskCategoryRepository categoryRepository,
+            HelpdeskTicketRepository ticketRepository,
             AuditLogService auditLogService,
             ObjectMapper objectMapper
     ) {
         this.categoryRepository = categoryRepository;
+        this.ticketRepository = ticketRepository;
         this.auditLogService = auditLogService;
         this.objectMapper = objectMapper;
     }
@@ -64,6 +67,51 @@ public class HelpdeskCategoryService {
                 null
         );
         return created;
+    }
+
+    @Transactional
+    public HelpdeskCategory updateCategory(Member actor, Long categoryId, String name) {
+        HelpdeskCategory category = requireCategory(categoryId);
+        String normalized = name == null ? "" : name.trim();
+        if (normalized.isBlank()) {
+            throw new ResponseStatusException(BAD_REQUEST, "Category name is required");
+        }
+        if (categoryRepository.existsByNameIgnoreCaseAndIdNot(normalized, categoryId)) {
+            throw new ResponseStatusException(CONFLICT, "Category name already exists");
+        }
+        Map<String, Object> before = categorySnapshot(category);
+        category.setName(normalized);
+        HelpdeskCategory updated = categoryRepository.save(category);
+        auditLogService.record(
+                actor,
+                "HELPDESK_CATEGORY_UPDATE",
+                "HELPDESK_CATEGORY",
+                updated.getId(),
+                toJson(before),
+                toJson(categorySnapshot(updated)),
+                null
+        );
+        return updated;
+    }
+
+    @Transactional
+    public HelpdeskCategory deleteCategory(Member actor, Long categoryId) {
+        HelpdeskCategory category = requireCategory(categoryId);
+        if (ticketRepository.existsByCategory_Id(categoryId)) {
+            throw new ResponseStatusException(CONFLICT, "Category is in use by tickets");
+        }
+        Map<String, Object> before = categorySnapshot(category);
+        categoryRepository.delete(category);
+        auditLogService.record(
+                actor,
+                "HELPDESK_CATEGORY_DELETE",
+                "HELPDESK_CATEGORY",
+                categoryId,
+                toJson(before),
+                null,
+                null
+        );
+        return category;
     }
 
     private Map<String, Object> categorySnapshot(HelpdeskCategory category) {

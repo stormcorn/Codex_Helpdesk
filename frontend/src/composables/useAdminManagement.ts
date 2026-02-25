@@ -76,6 +76,47 @@ export function useAdminManagement(options: UseAdminManagementOptions) {
     }
   }
 
+  async function updateHelpdeskCategory(categoryId: number, name: string): Promise<void> {
+    if (!options.isAdmin.value) return;
+    const normalized = name.trim();
+    if (!normalized) {
+      categoryFeedback.value = '請輸入分類名稱。';
+      return;
+    }
+    categoryFeedback.value = '';
+    try {
+      await requestJson<HelpdeskCategory>(
+        `/api/admin/helpdesk-categories/${categoryId}`,
+        {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json', ...options.authHeaders() },
+          body: JSON.stringify({ name: normalized })
+        },
+        '修改分類失敗'
+      );
+      await loadAdminHelpdeskCategories();
+      await options.loadHelpdeskCategories();
+    } catch (e) {
+      categoryFeedback.value = e instanceof Error ? e.message : '修改分類失敗';
+    }
+  }
+
+  async function deleteHelpdeskCategory(categoryId: number): Promise<void> {
+    if (!options.isAdmin.value) return;
+    categoryFeedback.value = '';
+    try {
+      await requestJson<void>(
+        `/api/admin/helpdesk-categories/${categoryId}`,
+        { method: 'DELETE', headers: options.authHeaders() },
+        '刪除分類失敗'
+      );
+      await loadAdminHelpdeskCategories();
+      await options.loadHelpdeskCategories();
+    } catch (e) {
+      categoryFeedback.value = e instanceof Error ? e.message : '刪除分類失敗';
+    }
+  }
+
   async function createAdminGroup(): Promise<void> {
     if (!options.isAdmin.value) return;
     const name = createGroupName.value.trim();
@@ -174,6 +215,8 @@ export function useAdminManagement(options: UseAdminManagementOptions) {
     loadAdminGroups,
     loadAdminHelpdeskCategories,
     createHelpdeskCategory,
+    updateHelpdeskCategory,
+    deleteHelpdeskCategory,
     createAdminGroup,
     addMemberToGroup,
     removeMemberFromGroup,

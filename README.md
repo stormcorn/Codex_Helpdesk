@@ -132,6 +132,8 @@
 ## 文件
 - `docs/CURRENT_ARCHITECTURE.md`：目前檔案與系統架構快照
 - `docs/REFRACTOR_REPORT_2026-02-17.md`：前後端重構報告（本次重構成果與驗證紀錄）
+- `docs/DEPLOY_RUNBOOK.md`：目前實務部署/回復手冊（ESXi + Portainer + Docker）
+- `docs/PORTAINER_WEBHOOK_CD.md`：Portainer Webhook 半自動部署（CD）設定說明
 
 ## 快速啟動（Docker Compose）
 在 `fullstack` 目錄：

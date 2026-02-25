@@ -46,6 +46,10 @@ public class HelpdeskCategory {
         return name;
     }
 
+    public void setName(String name) {
+        this.name = name;
+    }
+
     public LocalDateTime getCreatedAt() {
         return createdAt;
     }
