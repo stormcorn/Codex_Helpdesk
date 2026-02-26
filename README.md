@@ -138,6 +138,7 @@
 - `docs/SYSTEM_FUNCTION_SPEC.md`：系統功能文件（角色權限、功能模組、API、即時更新）
 - `docs/ENGINEERING_STANDARDS.md`：開發與維運規範（版本、測試、部署、安全、文件維護）
 - `docs/UI_UX_DESIGN_GUIDELINES.md`：UI/UX 設計文件（流程、互動、狀態、RWD 準則）
+- `docs/UI_COMPONENT_LAYOUT_MAP.md`：UI 元件佈局地圖（供 AI 設計 Agent 參考）
 - `docs/CURRENT_ARCHITECTURE.md`：目前檔案與系統架構快照
 - `docs/REFRACTOR_REPORT_2026-02-17.md`：前後端重構報告（本次重構成果與驗證紀錄）
 - `docs/DEPLOY_RUNBOOK.md`：目前實務部署/回復手冊（ESXi + Portainer + Docker）

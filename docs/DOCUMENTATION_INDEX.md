@@ -17,6 +17,8 @@
 ## 3. UI/UX 設計文件
 - `docs/UI_UX_DESIGN_GUIDELINES.md`
   - 介面結構、互動流程、狀態/權限呈現、手機版設計原則與檢查清單
+- `docs/UI_COMPONENT_LAYOUT_MAP.md`
+  - 畫面元件佈局地圖（screen-by-screen + component layout），供 AI 設計 Agent 參考
 
 ## 4. 部署與維運文件
 - `docs/DEPLOY_RUNBOOK.md`
