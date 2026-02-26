@@ -12,6 +12,7 @@
 - 工單狀態歷程
 - 作業稽核紀錄（Audit Log）
 - 通知中心（跳轉、自動展開、高亮）
+- 即時更新（WebSocket/STOMP：新工單、回覆、狀態異動自動刷新）
 - 工單篩選/搜尋/排序
 
 技術棧：
@@ -55,12 +56,14 @@
 - 指派成員加入群組
 - 將已加入群組的成員指定為該群組主管（單一主管）
 
-### 4. 通知中心
+### 4. 通知中心與即時更新
 - Header 通知 badge
 - 通知可點擊跳轉對應工單
 - 跳轉後自動展開工單，並 `scroll into center`
 - 跳轉卡片短暫發光高亮
 - 新工單自動高亮約 3 秒
+- WebSocket/STOMP 訂閱 `/topic/tickets`（透過 `/ws`）
+- 收到工單事件後自動刷新工單列表與通知（無需手動重整）
 
 ### 5. 工單列表體驗
 - 關鍵字搜尋
@@ -108,6 +111,7 @@
 - `PATCH /api/helpdesk/tickets/{ticketId}/delete`
 - `PATCH /api/helpdesk/tickets/{ticketId}/supervisor-approve`
 - `POST /api/helpdesk/tickets/{ticketId}/messages`
+  - 支援 `application/json` 與 `multipart/form-data`（回覆訊息 + `files[]`）
 - `GET /api/helpdesk/tickets/{ticketId}/attachments/{attachmentId}/view`
 - `GET /api/helpdesk/tickets/{ticketId}/attachments/{attachmentId}/download`
 
@@ -170,7 +174,8 @@
 ```bash
 ssh <deploy-user>@<deploy-host>
 cd /opt/fullstack
-git pull origin main
+git fetch origin main
+git reset --hard origin/main
 docker compose -p helpdesk up -d --build --force-recreate backend frontend
 ```
 
@@ -186,10 +191,11 @@ curl -i --max-time 5 http://localhost:5173/api/hello
 ### Remote 一鍵部署腳本（推薦）
 - 路徑：`/opt/fullstack/scripts/deploy_helpdesk.sh`
 - 功能：
-  - `git pull origin main`
+  - `git fetch origin main` + `git reset --hard origin/main`
   - 重建 `backend/frontend`
   - 等待 `/api/hello` 回 `200`
   - 輸出容器狀態、前端資產 hash、API 驗證結果
+  - 相容 remote 分支曾 force-push（歷史重寫）情境
 
 執行方式：
 
@@ -209,6 +215,9 @@ docker compose up -d --build
 - 前端：`http://localhost:5173`
 - 後端：`http://localhost:8080`
 - PostgreSQL：`localhost:5432`（db/user 依 `.env` 設定）
+
+補充：
+- 前端 Nginx 會代理 `/api/*` 與 `/ws` 到 backend（供 API 與 WebSocket 即時更新使用）
 
 停止服務：
 ```bash

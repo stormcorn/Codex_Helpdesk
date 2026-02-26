@@ -2,6 +2,10 @@
 
 本文件描述目前專案在公司內網（ESXi VM + Docker + Portainer）環境的實際部署方式。
 
+目前正式流程：
+- `CI`（GitHub Actions）+ `SSH` 手動部署
+- Portainer 保留作為容器監看 / logs / 手動重啟工具
+
 ## 1. 架構摘要
 - 主機：Linux VM（VMware ESXi 管理）
 - 容器：
@@ -33,18 +37,39 @@ docker compose logs --since=5m frontend | tail -n 50
 curl -i http://localhost:5173/api/hello
 ```
 
-## 4. 遠端主機（SSH）部署流程
-若 Portainer 無法 `Pull and redeploy`，可直接在遠端主機用 Docker CLI 部署。
+## 4. 遠端主機（SSH）部署流程（正式）
+正式部署以 `/opt/fullstack`（git clone 專案目錄）為主，不使用 Portainer image-only stack 作為版本來源。
+
+推薦使用部署腳本：
 
 ```bash
 ssh <deploy-user>@<deploy-host>
-cd /data/compose/6
-docker compose -p helpdesk -f docker-compose.yml up -d --build --force-recreate
+cd /opt/fullstack
+./scripts/deploy_helpdesk.sh
+```
+
+腳本內容重點：
+- `git fetch origin main`
+- `git reset --hard origin/main`
+- `docker compose -p helpdesk up -d --build --force-recreate backend frontend`
+- 等待 `/api/hello` 回 `200`
+
+若需手動逐步執行：
+
+```bash
+ssh <deploy-user>@<deploy-host>
+cd /opt/fullstack
+git fetch origin main
+git reset --hard origin/main
+docker compose -p helpdesk up -d --build --force-recreate backend frontend
 docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
 docker logs --tail 120 fullstack-backend
 docker logs --tail 80 fullstack-frontend
 curl -i http://localhost:5173/api/hello
 ```
+
+注意：
+- 遠端部署機若遇到 repo 歷史重寫（force push），`git pull` 可能失敗；請使用 `fetch + reset --hard`（腳本已內建）。
 
 ## 5. Portainer Stack 更新（UI）
 若 Portainer Git 認證正常：
@@ -54,6 +79,7 @@ curl -i http://localhost:5173/api/hello
 
 若 Portainer Git 認證失效：
 - 改用 SSH CLI（見第 4 節）或在 Portainer 更新 Git 認證（PAT/SSH）
+- 即使 Portainer 可更新，也建議以 `/opt/fullstack` 的 git clone 部署為準，避免只重建舊 image
 
 ## 6. 部署後驗證清單
 1. 容器狀態皆為 `running`
@@ -63,9 +89,11 @@ curl -i http://localhost:5173/api/hello
    - Flyway migration/baseline 正常訊息
 4. `fullstack-frontend` logs 無：
    - `host not found in upstream`
-5. API 測試：
+5. `fullstack-frontend` 代理 `/ws` 正常（即時更新功能）
+   - 前端兩個視窗測試：A 建單/回覆/改狀態，B 無需重整即可看到列表更新
+6. API 測試：
    - `GET /api/hello` 回 `200`
-6. 前端 UI：
+7. 前端 UI：
    - 可登入
    - 工單列表可載入
    - 通知 API 可載入
@@ -96,6 +124,16 @@ curl -i http://localhost:5173/api/hello
 處理：
 - 改用 GitHub PAT（不要用 GitHub 密碼）
 - 或改用 SSH deploy key
+
+### D. Remote 部署腳本在 `git pull` 卡住分支分岔
+常見於曾做過 `git push --force`（歷史重寫）後。
+
+處理：
+1. 更新腳本到最新版（`scripts/deploy_helpdesk.sh`）
+2. 手動執行一次：
+   - `git fetch origin main`
+   - `git reset --hard origin/main`
+3. 再跑部署腳本
 
 ## 8. 回復（Rollback）原則
 1. 優先回到上一個 Git commit（已驗證版本）
