@@ -39,6 +39,7 @@ const {
   authError,
   loginForm,
   registerForm,
+  registerGroupOptions,
   token,
   currentMember,
   isAuthenticated,
@@ -47,6 +48,7 @@ const {
   authHeaders,
   nextRegisterStep,
   prevRegisterStep,
+  loadRegisterGroupOptions,
   login,
   register,
   restoreSession,
@@ -85,6 +87,7 @@ const {
   statusFilter,
   archiveStatusFilter,
   replyInputs,
+  replyFiles,
   statusDrafts,
   itActionLoading,
   itFeedback,
@@ -110,6 +113,7 @@ const {
   closeLightbox,
   highlightTicket,
   onFilesChanged,
+  onReplyFilesChanged,
   replaceTicket,
   toggleTicket,
   canDeleteTicket,
@@ -150,6 +154,7 @@ const {
   tickets,
   loadingTickets,
   replyInputs,
+  replyFiles,
   statusDrafts,
   itActionLoading,
   itFeedback,
@@ -288,12 +293,15 @@ const activeTicketsPanelProps = computed(() => ({
   itActionLoading,
   statusDrafts,
   replyInputs,
+  replyFiles,
   itFeedback: itFeedback.value,
+  onReplyFilesChanged,
   effectiveStatus,
   isTicketDeleted,
   canSupervisorApprove,
   canDeleteTicket,
   displayStatus,
+  formatSize,
   isImageAttachment,
   normalizeStatus,
   formatStatusTransition
@@ -309,6 +317,7 @@ const archivePanelProps = computed(() => ({
   effectiveStatus,
   isTicketDeleted,
   displayStatus,
+  formatSize,
   isImageAttachment,
   normalizeStatus,
   formatStatusTransition
@@ -343,6 +352,7 @@ const dashboardContext = computed<DashboardContext>(() => ({
 }));
 
 onMounted(async () => {
+  await loadRegisterGroupOptions();
   await runOnMounted();
 });
 
@@ -361,6 +371,7 @@ onBeforeUnmount(() => {
         :auth-error="authError"
         :login-form="loginForm"
         :register-form="registerForm"
+        :register-group-options="registerGroupOptions"
         @login="login"
         @next-register-step="nextRegisterStep"
         @prev-register-step="prevRegisterStep"

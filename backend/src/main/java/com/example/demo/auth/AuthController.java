@@ -24,7 +24,13 @@ public class AuthController {
     @PostMapping("/register")
     @ResponseStatus(HttpStatus.CREATED)
     public AuthService.AuthResult register(@RequestBody RegisterRequest request) {
-        return authService.register(request.employeeId(), request.name(), request.email(), request.password());
+        return authService.register(
+                request.employeeId(),
+                request.name(),
+                request.email(),
+                request.password(),
+                request.groupId()
+        );
     }
 
     @PostMapping("/login")
@@ -45,7 +51,7 @@ public class AuthController {
         return Map.of("message", "Logged out", "employeeId", member.getEmployeeId());
     }
 
-    public record RegisterRequest(String employeeId, String name, String email, String password) {
+    public record RegisterRequest(String employeeId, String name, String email, String password, Long groupId) {
     }
 
     public record LoginRequest(String employeeId, String password) {

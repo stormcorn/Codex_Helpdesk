@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue';
-import type { AuthMode, LoginForm, RegisterForm } from '../types';
+import type { AuthMode, LoginForm, PublicGroupOption, RegisterForm } from '../types';
 
 const props = defineProps<{
   authMode: AuthMode;
@@ -9,6 +9,7 @@ const props = defineProps<{
   authError: string;
   loginForm: LoginForm;
   registerForm: RegisterForm;
+  registerGroupOptions: PublicGroupOption[];
 }>();
 
 const emit = defineEmits<{
@@ -57,6 +58,16 @@ function submitRegisterForm(): void {
       </div>
       <form class="form-grid" @submit.prevent="submitRegisterForm">
         <template v-if="props.registerStep === 1">
+          <div class="row">
+            <label>
+              所屬部門群組
+              <select v-model="props.registerForm.groupId" required>
+                <option :value="null" disabled>請選擇部門群組</option>
+                <option v-for="g in props.registerGroupOptions" :key="g.id" :value="g.id">{{ g.name }}</option>
+              </select>
+            </label>
+            <small class="subtitle">若無可選群組，請先聯繫管理員建立。</small>
+          </div>
           <label>帳號（員工工號）<input v-model="props.registerForm.employeeId" required /></label>
           <label>姓名<input v-model="props.registerForm.name" required /></label>
         </template>
@@ -69,6 +80,7 @@ function submitRegisterForm(): void {
             <p>工號：{{ props.registerForm.employeeId }}</p>
             <p>姓名：{{ props.registerForm.name }}</p>
             <p>Email：{{ props.registerForm.email }}</p>
+            <p>部門群組：{{ props.registerGroupOptions.find((g) => g.id === props.registerForm.groupId)?.name ?? '-' }}</p>
           </div>
         </template>
         <div class="row">

@@ -30,6 +30,7 @@ function createOptions() {
   const tickets = ref<Ticket[]>([]);
   const loadingTickets = ref(false);
   const replyInputs = reactive<Record<number, string>>({});
+  const replyFiles = reactive<Record<number, File[]>>({});
   const statusDrafts = reactive<Record<number, Ticket['status']>>({});
   const itActionLoading = reactive<Record<number, boolean>>({});
   const itFeedback = ref('');
@@ -47,6 +48,7 @@ function createOptions() {
     tickets,
     loadingTickets,
     replyInputs,
+    replyFiles,
     statusDrafts,
     itActionLoading,
     itFeedback,
@@ -101,6 +103,7 @@ describe('useTicketsActions', () => {
       categoryId: null,
       categoryName: null,
       createdByMemberId: null,
+      createdByEmployeeId: null,
       deleted: true,
       deletedAt: '2026-01-01T00:00:00Z',
       createdAt: '2026-01-01T00:00:00Z',

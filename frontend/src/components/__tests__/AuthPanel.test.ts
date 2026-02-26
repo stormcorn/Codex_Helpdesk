@@ -11,7 +11,8 @@ describe('AuthPanel', () => {
         authLoading: false,
         authError: '',
         loginForm: { employeeId: '', password: '' },
-        registerForm: { employeeId: '', name: '', email: '', password: '' }
+        registerForm: { employeeId: '', name: '', email: '', password: '', groupId: null },
+        registerGroupOptions: []
       }
     });
 
@@ -29,7 +30,8 @@ describe('AuthPanel', () => {
         authLoading: false,
         authError: '',
         loginForm: { employeeId: '', password: '' },
-        registerForm: { employeeId: 'A001', name: 'Amy', email: 'amy@test.com', password: 'Password123' }
+        registerForm: { employeeId: 'A001', name: 'Amy', email: 'amy@test.com', password: 'Password123', groupId: 1 },
+        registerGroupOptions: [{ id: 1, name: 'IT' }]
       }
     });
 

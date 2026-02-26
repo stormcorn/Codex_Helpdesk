@@ -6,6 +6,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 import com.example.demo.email.EmailNotificationService;
+import com.example.demo.group.DepartmentGroupService;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -21,21 +22,24 @@ public class AuthService {
     private final AuthTokenService authTokenService;
     private final AuthMemberAdminService authMemberAdminService;
     private final EmailNotificationService emailNotificationService;
+    private final DepartmentGroupService departmentGroupService;
 
     public AuthService(
             MemberRepository memberRepository,
             AuthTokenService authTokenService,
             AuthMemberAdminService authMemberAdminService,
-            EmailNotificationService emailNotificationService
+            EmailNotificationService emailNotificationService,
+            DepartmentGroupService departmentGroupService
     ) {
         this.memberRepository = memberRepository;
         this.authTokenService = authTokenService;
         this.authMemberAdminService = authMemberAdminService;
         this.emailNotificationService = emailNotificationService;
+        this.departmentGroupService = departmentGroupService;
     }
 
     @Transactional
-    public AuthResult register(String employeeId, String name, String email, String password) {
+    public AuthResult register(String employeeId, String name, String email, String password, Long groupId) {
         String normalizedEmployeeId = normalize(employeeId);
         String normalizedName = normalize(name);
         String normalizedEmail = normalize(email).toLowerCase();
@@ -65,6 +69,9 @@ public class AuthService {
         );
 
         Member saved = memberRepository.save(member);
+        if (groupId != null) {
+            departmentGroupService.addMember(saved, groupId, saved.getId());
+        }
         emailNotificationService.enqueueUserRegistered(saved);
         return createToken(saved);
     }

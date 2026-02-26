@@ -26,6 +26,7 @@ const props = defineProps<{
   effectiveStatus: (ticket: Ticket) => Ticket['status'];
   isTicketDeleted: (ticket: Ticket) => boolean;
   displayStatus: (ticket: Ticket) => string;
+  formatSize: (bytes: number) => string;
   isImageAttachment: (attachment: Attachment) => boolean;
   normalizeStatus: (value: unknown) => Ticket['status'];
   formatStatusTransition: (history: TicketStatusHistory) => string;
@@ -64,8 +65,10 @@ const archiveStatusFilterModel = computed({
 const emptyBoolRecord: NumberBooleanMap = {};
 const emptyStatusRecord: NumberTicketStatusMap = {};
 const emptyStringRecord: NumberStringMap = {};
+const emptyReplyFiles: Record<number, File[]> = {};
 const noSupervisorApprove = () => false;
 const noDeletePermission = () => false;
+const noopReplyFilesChanged = () => {};
 </script>
 
 <template>
@@ -114,11 +117,14 @@ const noDeletePermission = () => false;
         :it-action-loading="emptyBoolRecord"
         :status-drafts="emptyStatusRecord"
         :reply-inputs="emptyStringRecord"
+        :reply-files="emptyReplyFiles"
+        :on-reply-files-changed="noopReplyFilesChanged"
         :effective-status="props.effectiveStatus"
         :is-ticket-deleted="props.isTicketDeleted"
         :can-supervisor-approve="noSupervisorApprove"
         :can-delete-ticket="noDeletePermission"
         :display-status="props.displayStatus"
+        :format-size="props.formatSize"
         :is-image-attachment="props.isImageAttachment"
         :normalize-status="props.normalizeStatus"
         :format-status-transition="props.formatStatusTransition"

@@ -47,6 +47,7 @@ export function useTicketsView(options: UseTicketsViewOptions) {
   const archiveStatusFilter = ref<TicketArchiveStatusFilter>('ALL');
 
   const replyInputs = reactive<Record<number, string>>({});
+  const replyFiles = reactive<Record<number, File[]>>({});
   const statusDrafts = reactive<Record<number, Ticket['status']>>({});
   const itActionLoading = reactive<Record<number, boolean>>({});
   const { feedback: itFeedback, clearFeedback: clearItFeedback } = useTextFeedback();
@@ -308,6 +309,11 @@ export function useTicketsView(options: UseTicketsViewOptions) {
     selectedFiles.value = Array.from(input.files ?? []);
   }
 
+  function onReplyFilesChanged(ticketId: number, event: Event): void {
+    const input = event.target as HTMLInputElement;
+    replyFiles[ticketId] = Array.from(input.files ?? []);
+  }
+
   function replaceTicket(updated: Ticket): void {
     const normalized = normalizeTicket(updated);
     tickets.value = tickets.value.map((t) => (t.id === normalized.id ? normalized : t));
@@ -355,6 +361,11 @@ export function useTicketsView(options: UseTicketsViewOptions) {
     ticketForm.categoryId = null;
     ticketForm.priority = 'GENERAL';
     selectedFiles.value = [];
+    Object.keys(replyInputs).forEach((key) => delete replyInputs[Number(key)]);
+    Object.keys(replyFiles).forEach((key) => delete replyFiles[Number(key)]);
+    Object.keys(statusDrafts).forEach((key) => delete statusDrafts[Number(key)]);
+    Object.keys(itActionLoading).forEach((key) => delete itActionLoading[Number(key)]);
+    Object.keys(openTicketIds).forEach((key) => delete openTicketIds[Number(key)]);
   }
 
   return {
@@ -373,6 +384,7 @@ export function useTicketsView(options: UseTicketsViewOptions) {
     statusFilter,
     archiveStatusFilter,
     replyInputs,
+    replyFiles,
     statusDrafts,
     itActionLoading,
     itFeedback,
@@ -400,6 +412,7 @@ export function useTicketsView(options: UseTicketsViewOptions) {
     clearTicketHighlights,
     highlightTicket,
     onFilesChanged,
+    onReplyFilesChanged,
     replaceTicket,
     toggleTicket,
     canDeleteTicket,

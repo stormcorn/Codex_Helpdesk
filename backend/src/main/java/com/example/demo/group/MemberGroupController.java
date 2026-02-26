@@ -31,6 +31,16 @@ public class MemberGroupController {
                 .toList();
     }
 
+    @GetMapping("/public")
+    public List<PublicGroupResponse> publicGroups() {
+        return groupService.listAll().stream()
+                .map(g -> new PublicGroupResponse(g.getId(), g.getName()))
+                .toList();
+    }
+
     public record MyGroupResponse(Long id, String name, boolean supervisor) {
+    }
+
+    public record PublicGroupResponse(Long id, String name) {
     }
 }

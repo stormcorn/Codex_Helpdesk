@@ -12,6 +12,7 @@ type UseTicketsActionsOptions = {
   tickets: Ref<Ticket[]>;
   loadingTickets: Ref<boolean>;
   replyInputs: Record<number, string>;
+  replyFiles: Record<number, File[]>;
   statusDrafts: Record<number, Ticket['status']>;
   itActionLoading: Record<number, boolean>;
   itFeedback: Ref<string>;
@@ -44,6 +45,7 @@ export function useTicketsActions(options: UseTicketsActionsOptions) {
         }
         options.statusDrafts[t.id] = options.effectiveStatus(t);
         options.replyInputs[t.id] = options.replyInputs[t.id] ?? '';
+        options.replyFiles[t.id] = options.replyFiles[t.id] ?? [];
         if (options.openTicketIds[t.id] === undefined) {
           options.openTicketIds[t.id] = false;
         }
@@ -111,6 +113,7 @@ export function useTicketsActions(options: UseTicketsActionsOptions) {
       options.highlightTicket(created.id, 'new', 3000);
       options.statusDrafts[created.id] = options.effectiveStatus(created);
       options.replyInputs[created.id] = '';
+      options.replyFiles[created.id] = [];
       options.openTicketIds[created.id] = false;
       options.ticketForm.subject = '';
       options.ticketForm.description = '';
@@ -160,19 +163,35 @@ export function useTicketsActions(options: UseTicketsActionsOptions) {
     if (options.isTicketDeleted(ticket)) return;
     const content = (options.replyInputs[ticket.id] ?? '').trim();
     if (!content) return;
+    const files = options.replyFiles[ticket.id] ?? [];
+    const oversized = files.find((f) => f.size >= options.maxFileBytes);
+    if (oversized) {
+      options.itFeedback.value = `檔案 ${oversized.name} 超過 5MB 限制。`;
+      return;
+    }
     options.itActionLoading[ticket.id] = true;
     options.itFeedback.value = '';
     try {
-      const updated = await requestJson<Ticket>(
-        `/api/helpdesk/tickets/${ticket.id}/messages`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', ...options.authHeaders() },
-          body: JSON.stringify({ content })
-        },
-        '回覆失敗'
-      );
+      const formData = new FormData();
+      formData.append('content', content);
+      files.forEach((f) => formData.append('files', f));
+      const response = await fetch(`/api/helpdesk/tickets/${ticket.id}/messages`, {
+        method: 'POST',
+        headers: options.authHeaders(),
+        body: formData
+      });
+      if (!response.ok) {
+        let parsed: unknown = null;
+        try {
+          parsed = await response.json();
+        } catch {
+          // ignore
+        }
+        throw new Error(parseErrorMessage('回覆失敗', parsed));
+      }
+      const updated = (await response.json()) as Ticket;
       options.replyInputs[ticket.id] = '';
+      options.replyFiles[ticket.id] = [];
       options.replaceTicket(updated);
     } catch (e) {
       options.itFeedback.value = e instanceof Error ? e.message : '回覆失敗';

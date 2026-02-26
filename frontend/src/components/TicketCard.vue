@@ -13,11 +13,14 @@ const props = defineProps<{
   itActionLoading: Record<number, boolean>;
   statusDrafts: Record<number, Ticket['status']>;
   replyInputs: Record<number, string>;
+  replyFiles: Record<number, File[]>;
+  onReplyFilesChanged: (ticketId: number, event: Event) => void;
   effectiveStatus: (ticket: Ticket) => Ticket['status'];
   isTicketDeleted: (ticket: Ticket) => boolean;
   canSupervisorApprove: (ticket: Ticket) => boolean;
   canDeleteTicket: (ticket: Ticket) => boolean;
   displayStatus: (ticket: Ticket) => string;
+  formatSize: (bytes: number) => string;
   isImageAttachment: (attachment: Attachment) => boolean;
   normalizeStatus: (value: unknown) => Ticket['status'];
   formatStatusTransition: (history: TicketStatusHistory) => string;
@@ -53,7 +56,7 @@ const emit = defineEmits<{
         <small>{{ props.open ? '收合' : '展開' }}</small>
       </button>
       <small :class="['ticket-meta', { 'deleted-meta': props.isTicketDeleted(props.ticket) }]">
-        {{ props.ticket.name }} · {{ new Date(props.ticket.createdAt).toLocaleString() }}
+        {{ props.ticket.createdByEmployeeId ? `${props.ticket.createdByEmployeeId} ` : '' }}{{ props.ticket.name }} · {{ new Date(props.ticket.createdAt).toLocaleString() }}
         <template v-if="props.ticket.groupName"> · 群組 {{ props.ticket.groupName }}</template>
         <template v-if="props.ticket.categoryName"> · 分類 {{ props.ticket.categoryName }}</template>
       </small>
@@ -135,11 +138,28 @@ const emit = defineEmits<{
           :format-status-transition="props.formatStatusTransition"
         />
 
-        <div v-if="props.mode === 'active' && props.isItOrAdmin" class="it-actions">
+        <div v-if="props.mode === 'active'" class="it-actions">
           <div class="row">
             <input v-model="props.replyInputs[props.ticket.id]" placeholder="輸入回覆訊息" />
             <button :disabled="props.itActionLoading[props.ticket.id] || props.isTicketDeleted(props.ticket)" @click="emit('sendReply', props.ticket)">送出回覆</button>
           </div>
+          <div class="row">
+            <label class="reply-file-field">
+              回覆附件（可多檔，每檔 &lt; 5MB）
+              <input
+                :key="`${props.ticket.id}-${(props.replyFiles[props.ticket.id] ?? []).map((f) => `${f.name}-${f.lastModified}`).join('|')}`"
+                type="file"
+                multiple
+                :disabled="props.itActionLoading[props.ticket.id] || props.isTicketDeleted(props.ticket)"
+                @change="props.onReplyFilesChanged(props.ticket.id, $event)"
+              />
+            </label>
+          </div>
+          <ul v-if="(props.replyFiles[props.ticket.id] ?? []).length" class="simple-list">
+            <li v-for="f in props.replyFiles[props.ticket.id]" :key="`${f.name}-${f.lastModified}`">
+              {{ f.name }} ({{ props.formatSize(f.size) }})
+            </li>
+          </ul>
         </div>
       </div>
     </Transition>

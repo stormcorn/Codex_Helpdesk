@@ -1,6 +1,6 @@
 import { computed, reactive, ref } from 'vue';
 import { requestJson } from './useApi';
-import type { AuthMode, LoginForm, Member, RegisterForm } from '../types';
+import type { AuthMode, LoginForm, Member, PublicGroupOption, RegisterForm } from '../types';
 
 type UseAuthOptions = {
   tokenKey: string;
@@ -16,7 +16,8 @@ export function useAuth(options: UseAuthOptions) {
   const authError = ref('');
 
   const loginForm = reactive<LoginForm>({ employeeId: '', password: '' });
-  const registerForm = reactive<RegisterForm>({ employeeId: '', name: '', email: '', password: '' });
+  const registerForm = reactive<RegisterForm>({ employeeId: '', name: '', email: '', password: '', groupId: null });
+  const registerGroupOptions = ref<PublicGroupOption[]>([]);
 
   const token = ref('');
   const currentMember = ref<Member | null>(null);
@@ -31,9 +32,11 @@ export function useAuth(options: UseAuthOptions) {
 
   function nextRegisterStep(): void {
     authError.value = '';
-    if (registerStep.value === 1 && (!registerForm.employeeId || !registerForm.name)) {
-      authError.value = '請先填寫員工工號與姓名。';
-      return;
+    if (registerStep.value === 1) {
+      if (!registerForm.groupId || !registerForm.employeeId || !registerForm.name) {
+        authError.value = '請先選擇部門群組並填寫員工工號與姓名。';
+        return;
+      }
     }
     if (registerStep.value === 2) {
       if (!registerForm.email || !registerForm.password) {
@@ -46,6 +49,21 @@ export function useAuth(options: UseAuthOptions) {
       }
     }
     registerStep.value = Math.min(3, registerStep.value + 1);
+  }
+
+  async function loadRegisterGroupOptions(): Promise<void> {
+    try {
+      registerGroupOptions.value = await requestJson<PublicGroupOption[]>(
+        '/api/groups/public',
+        {},
+        '讀取部門群組失敗'
+      );
+      if (!registerForm.groupId && registerGroupOptions.value.length) {
+        registerForm.groupId = registerGroupOptions.value[0].id;
+      }
+    } catch (e) {
+      authError.value = e instanceof Error ? e.message : '讀取部門群組失敗';
+    }
   }
 
   function prevRegisterStep(): void {
@@ -134,6 +152,7 @@ export function useAuth(options: UseAuthOptions) {
     authError,
     loginForm,
     registerForm,
+    registerGroupOptions,
     token,
     currentMember,
     isAuthenticated,
@@ -142,6 +161,7 @@ export function useAuth(options: UseAuthOptions) {
     authHeaders,
     nextRegisterStep,
     prevRegisterStep,
+    loadRegisterGroupOptions,
     login,
     register,
     restoreSession,

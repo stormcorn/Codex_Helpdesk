@@ -48,6 +48,7 @@ export type RegisterForm = {
   name: string;
   email: string;
   password: string;
+  groupId: number | null;
 };
 
 export type Attachment = {
@@ -93,6 +94,7 @@ export type Ticket = {
   categoryId: number | null;
   categoryName: string | null;
   createdByMemberId: number | null;
+  createdByEmployeeId: string | null;
   deleted: boolean;
   deletedAt: string | null;
   createdAt: string;
@@ -115,6 +117,11 @@ export type MyGroup = {
   id: number;
   name: string;
   supervisor: boolean;
+};
+
+export type PublicGroupOption = {
+  id: number;
+  name: string;
 };
 
 export type HelpdeskCategory = {

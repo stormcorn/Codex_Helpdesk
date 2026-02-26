@@ -29,12 +29,15 @@ const props = defineProps<{
   itActionLoading: NumberBooleanMap;
   statusDrafts: NumberTicketStatusMap;
   replyInputs: NumberStringMap;
+  replyFiles: Record<number, File[]>;
   itFeedback: string;
+  onReplyFilesChanged: (ticketId: number, event: Event) => void;
   effectiveStatus: (ticket: Ticket) => Ticket['status'];
   isTicketDeleted: (ticket: Ticket) => boolean;
   canSupervisorApprove: (ticket: Ticket) => boolean;
   canDeleteTicket: (ticket: Ticket) => boolean;
   displayStatus: (ticket: Ticket) => string;
+  formatSize: (bytes: number) => string;
   isImageAttachment: (attachment: Attachment) => boolean;
   normalizeStatus: (value: unknown) => Ticket['status'];
   formatStatusTransition: (history: TicketStatusHistory) => string;
@@ -131,11 +134,14 @@ const statusFilterModel = computed({
         :it-action-loading="props.itActionLoading"
         :status-drafts="props.statusDrafts"
         :reply-inputs="props.replyInputs"
+        :reply-files="props.replyFiles"
+        :on-reply-files-changed="props.onReplyFilesChanged"
         :effective-status="props.effectiveStatus"
         :is-ticket-deleted="props.isTicketDeleted"
         :can-supervisor-approve="props.canSupervisorApprove"
         :can-delete-ticket="props.canDeleteTicket"
         :display-status="props.displayStatus"
+        :format-size="props.formatSize"
         :is-image-attachment="props.isImageAttachment"
         :normalize-status="props.normalizeStatus"
         :format-status-transition="props.formatStatusTransition"

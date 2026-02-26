@@ -2,6 +2,7 @@ package com.example.demo.helpdesk;
 
 import com.example.demo.audit.AuditLogService;
 import com.example.demo.auth.Member;
+import com.example.demo.auth.MemberRepository;
 import com.example.demo.auth.MemberRole;
 import com.example.demo.email.EmailNotificationService;
 import com.example.demo.group.DepartmentGroup;
@@ -25,6 +26,7 @@ public class HelpdeskTicketService {
 
     private final HelpdeskTicketRepository repository;
     private final HelpdeskTicketMessageRepository messageRepository;
+    private final MemberRepository memberRepository;
     private final AuditLogService auditLogService;
     private final DepartmentGroupService groupService;
     private final HelpdeskCategoryService categoryService;
@@ -37,6 +39,7 @@ public class HelpdeskTicketService {
     public HelpdeskTicketService(
             HelpdeskTicketRepository repository,
             HelpdeskTicketMessageRepository messageRepository,
+            MemberRepository memberRepository,
             AuditLogService auditLogService,
             DepartmentGroupService groupService,
             HelpdeskCategoryService categoryService,
@@ -48,6 +51,7 @@ public class HelpdeskTicketService {
     ) {
         this.repository = repository;
         this.messageRepository = messageRepository;
+        this.memberRepository = memberRepository;
         this.auditLogService = auditLogService;
         this.groupService = groupService;
         this.categoryService = categoryService;
@@ -119,7 +123,7 @@ public class HelpdeskTicketService {
     }
 
     @Transactional
-    public HelpdeskTicket addReply(Long ticketId, Member author, String content) {
+    public HelpdeskTicket addReply(Long ticketId, Member author, String content, List<MultipartFile> files) {
         HelpdeskTicket ticket = repository.findById(ticketId)
                 .orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "Ticket not found"));
         if (content == null || content.isBlank()) {
@@ -135,12 +139,18 @@ public class HelpdeskTicketService {
         );
         messageRepository.save(message);
         ticket.addMessage(message);
+        attachmentService.saveAttachments(ticket, files == null ? List.of() : files);
         repository.save(ticket);
         HelpdeskTicket updated = repository.findWithDetailsById(ticketId)
                 .orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "Ticket not found"));
         notificationService.notifyTicketReplied(updated, author);
         emailNotificationService.enqueueTicketReplied(updated, author);
         return updated;
+    }
+
+    @Transactional
+    public HelpdeskTicket addReply(Long ticketId, Member author, String content) {
+        return addReply(ticketId, author, content, List.of());
     }
 
     @Transactional
@@ -276,6 +286,13 @@ public class HelpdeskTicketService {
 
     public List<HelpdeskTicketStatusHistory> sortStatusHistoriesByCreatedAt(Collection<HelpdeskTicketStatusHistory> histories) {
         return historyService.sortStatusHistoriesByCreatedAt(histories);
+    }
+
+    @Transactional(readOnly = true)
+    public String getCreatorEmployeeId(HelpdeskTicket ticket) {
+        Long memberId = ticket.getCreatedByMemberId();
+        if (memberId == null) return null;
+        return memberRepository.findById(memberId).map(Member::getEmployeeId).orElse(null);
     }
 
     public record AttachmentDownload(java.nio.file.Path path, String originalFilename, String contentType) {

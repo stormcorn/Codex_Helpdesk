@@ -81,14 +81,26 @@ public class HelpdeskController {
                 .toList();
     }
 
-    @PostMapping("/{ticketId}/messages")
+    @PostMapping(value = "/{ticketId}/messages", consumes = MediaType.APPLICATION_JSON_VALUE)
     public TicketResponse reply(
             @RequestHeader(value = "Authorization", required = false) String authorization,
             @PathVariable Long ticketId,
             @RequestBody ReplyRequest request
     ) {
-        Member member = authService.requireItOrAdmin(authorization);
+        Member member = authService.requireMember(authorization);
         HelpdeskTicket updated = service.addReply(ticketId, member, request.content());
+        return TicketResponse.from(updated, service);
+    }
+
+    @PostMapping(value = "/{ticketId}/messages", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public TicketResponse replyWithAttachments(
+            @RequestHeader(value = "Authorization", required = false) String authorization,
+            @PathVariable Long ticketId,
+            @RequestParam String content,
+            @RequestParam(value = "files", required = false) List<MultipartFile> files
+    ) {
+        Member member = authService.requireMember(authorization);
+        HelpdeskTicket updated = service.addReply(ticketId, member, content, files == null ? List.of() : files);
         return TicketResponse.from(updated, service);
     }
 
@@ -186,7 +198,7 @@ public class HelpdeskController {
                                  String priority, boolean supervisorApproved, Long supervisorApprovedByMemberId,
                                  LocalDateTime supervisorApprovedAt, Long groupId, String groupName,
                                  Long categoryId, String categoryName,
-                                 Long createdByMemberId, boolean deleted,
+                                 Long createdByMemberId, String createdByEmployeeId, boolean deleted,
                                  LocalDateTime deletedAt, LocalDateTime createdAt,
                                  List<AttachmentResponse> attachments,
                                  List<MessageResponse> messages,
@@ -208,6 +220,7 @@ public class HelpdeskController {
                     ticket.getCategory() == null ? null : ticket.getCategory().getId(),
                     ticket.getCategory() == null ? null : ticket.getCategory().getName(),
                     ticket.getCreatedByMemberId(),
+                    service.getCreatorEmployeeId(ticket),
                     ticket.isDeleted(),
                     ticket.getDeletedAt(),
                     ticket.getCreatedAt(),
