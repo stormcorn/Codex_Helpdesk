@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useAuth } from './composables/useAuth';
 import { useNotifications } from './composables/useNotifications';
 import { useAuditLogs } from './composables/useAuditLogs';
@@ -9,6 +9,7 @@ import { useTicketsActions } from './composables/useTicketsActions';
 import { useAdminManagement } from './composables/useAdminManagement';
 import { useBaseData } from './composables/useBaseData';
 import { useDashboardLifecycle } from './composables/useDashboardLifecycle';
+import { useRealtimeTickets } from './composables/useRealtimeTickets';
 import HelpdeskForm from './components/HelpdeskForm.vue';
 import ActiveTicketsPanel from './components/ActiveTicketsPanel.vue';
 import ArchivePanel from './components/ArchivePanel.vue';
@@ -351,12 +352,35 @@ const dashboardContext = computed<DashboardContext>(() => ({
   unreadCount: unreadCount.value
 }));
 
+const currentMemberId = computed(() => currentMember.value?.id ?? null);
+
+const { connectRealtimeTickets, disconnectRealtimeTickets } = useRealtimeTickets({
+  isAuthenticated,
+  currentMemberId,
+  loadTickets,
+  loadNotifications,
+  highlightTicket
+});
+
+watch(
+  isAuthenticated,
+  (authed) => {
+    if (authed) {
+      connectRealtimeTickets();
+      return;
+    }
+    disconnectRealtimeTickets();
+  },
+  { immediate: true }
+);
+
 onMounted(async () => {
   await loadRegisterGroupOptions();
   await runOnMounted();
 });
 
 onBeforeUnmount(() => {
+  disconnectRealtimeTickets();
   runOnBeforeUnmount();
 });
 </script>

@@ -35,6 +35,7 @@ public class HelpdeskTicketService {
     private final HelpdeskAttachmentService attachmentService;
     private final HelpdeskTicketHistoryService historyService;
     private final HelpdeskTicketSnapshotService snapshotService;
+    private final HelpdeskRealtimePublisher realtimePublisher;
 
     public HelpdeskTicketService(
             HelpdeskTicketRepository repository,
@@ -47,7 +48,8 @@ public class HelpdeskTicketService {
             EmailNotificationService emailNotificationService,
             HelpdeskAttachmentService attachmentService,
             HelpdeskTicketHistoryService historyService,
-            HelpdeskTicketSnapshotService snapshotService
+            HelpdeskTicketSnapshotService snapshotService,
+            HelpdeskRealtimePublisher realtimePublisher
     ) {
         this.repository = repository;
         this.messageRepository = messageRepository;
@@ -60,6 +62,7 @@ public class HelpdeskTicketService {
         this.attachmentService = attachmentService;
         this.historyService = historyService;
         this.snapshotService = snapshotService;
+        this.realtimePublisher = realtimePublisher;
     }
 
     @Transactional
@@ -115,6 +118,7 @@ public class HelpdeskTicketService {
         );
         notificationService.notifyTicketCreated(finalTicket, creator);
         emailNotificationService.enqueueTicketCreated(finalTicket, creator);
+        realtimePublisher.publishTicketCreated(finalTicket.getId(), creator.getId());
         return finalTicket;
     }
 
@@ -145,6 +149,7 @@ public class HelpdeskTicketService {
                 .orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "Ticket not found"));
         notificationService.notifyTicketReplied(updated, author);
         emailNotificationService.enqueueTicketReplied(updated, author);
+        realtimePublisher.publishTicketReplied(updated.getId(), author.getId());
         return updated;
     }
 
@@ -208,6 +213,7 @@ public class HelpdeskTicketService {
         if (status == HelpdeskTicketStatus.CLOSED) {
             emailNotificationService.enqueueTicketClosed(updated, actor);
         }
+        realtimePublisher.publishTicketStatusChanged(updated.getId(), actor.getId());
         return updated;
     }
 
@@ -241,6 +247,7 @@ public class HelpdeskTicketService {
                     snapshotService.toJson(Map.of("fromStatus", fromStatus.name(), "toStatus", HelpdeskTicketStatus.DELETED.name()))
             );
         }
+        realtimePublisher.publishTicketDeleted(updated.getId(), actor.getId());
         return updated;
     }
 
@@ -273,6 +280,7 @@ public class HelpdeskTicketService {
                     snapshotService.toJson(Map.of("groupId", updated.getGroup() == null ? null : updated.getGroup().getId()))
             );
         }
+        realtimePublisher.publishTicketSupervisorApproved(updated.getId(), actor.getId());
         return updated;
     }
 
