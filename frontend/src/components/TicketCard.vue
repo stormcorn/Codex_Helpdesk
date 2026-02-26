@@ -35,6 +35,17 @@ const emit = defineEmits<{
   downloadAttachment: [ticketId: number, attachment: Attachment];
   sendReply: [ticket: Ticket];
 }>();
+
+function shouldIgnoreCardToggle(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target.closest('.ticket-content')) return true;
+  return Boolean(target.closest('button, a, input, textarea, select, label'));
+}
+
+function onCardClick(event: MouseEvent): void {
+  if (shouldIgnoreCardToggle(event.target)) return;
+  emit('toggleTicket', props.ticket.id);
+}
 </script>
 
 <template>
@@ -49,6 +60,7 @@ const emit = defineEmits<{
         'jump-ticket-highlight': props.jumpHighlight
       }
     ]"
+    @click="onCardClick"
   >
     <div class="ticket-head">
       <button class="ticket-toggle" type="button" @click="emit('toggleTicket', props.ticket.id)">
