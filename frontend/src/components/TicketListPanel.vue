@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { Attachment, Ticket, TicketStats } from '../types';
+import { formatDateTime } from '../utils/datetime';
 
 const props = defineProps<{
   open: boolean;
@@ -77,8 +78,8 @@ function handleReplyInput(ticketId: number, event: Event): void {
         </div>
         <div v-if="props.openTicketIds[ticket.id]" class="ticket-content">
           <p :class="{ deleted: ticket.deleted }">{{ ticket.description }}</p>
-          <small>{{ ticket.name }} ({{ ticket.email }}) · {{ new Date(ticket.createdAt).toLocaleString() }}</small>
-          <small v-if="ticket.deletedAt"> · 已刪除於 {{ new Date(ticket.deletedAt).toLocaleString() }}</small>
+          <small>{{ ticket.name }} ({{ ticket.email }}) · {{ formatDateTime(ticket.createdAt) }}</small>
+          <small v-if="ticket.deletedAt"> · 已刪除於 {{ formatDateTime(ticket.deletedAt) }}</small>
 
           <ul v-if="ticket.attachments.length" class="simple-list">
             <li v-for="att in ticket.attachments" :key="att.id">
@@ -96,7 +97,7 @@ function handleReplyInput(ticketId: number, event: Event): void {
             <ul class="simple-list">
               <li v-for="msg in ticket.messages" :key="msg.id">
                 <strong>[{{ msg.authorRole }}] {{ msg.authorName }}</strong>：{{ msg.content }}
-                <small> · {{ new Date(msg.createdAt).toLocaleString() }}</small>
+                <small> · {{ formatDateTime(msg.createdAt) }}</small>
               </li>
             </ul>
           </div>

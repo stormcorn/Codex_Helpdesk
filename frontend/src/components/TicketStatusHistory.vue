@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { TicketStatusHistory } from '../types';
+import { formatDateTime } from '../utils/datetime';
 
 const props = defineProps<{
   statusHistories: TicketStatusHistory[];
@@ -19,7 +20,7 @@ const props = defineProps<{
         <small>
           {{ props.formatStatusTransition(history) }} ·
           {{ history.changedByRole }} {{ history.changedByName }} ({{ history.changedByEmployeeId }}) ·
-          {{ new Date(history.createdAt).toLocaleString() }}
+          {{ formatDateTime(history.createdAt) }}
         </small>
       </li>
     </ul>

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { DashboardContext, NotificationItem } from '../types';
+import { formatDateTime } from '../utils/datetime';
 
 const props = defineProps<{
   context: DashboardContext;
@@ -26,7 +27,7 @@ const emit = defineEmits<{
       <li v-for="item in props.notifications" :key="item.id" :class="{ unread: !item.read }">
         <button class="notify-item" type="button" @click="emit('openNotification', item)">
           <strong>{{ item.message }}</strong>
-          <small>{{ new Date(item.createdAt).toLocaleString() }}</small>
+          <small>{{ formatDateTime(item.createdAt) }}</small>
         </button>
       </li>
     </ul>

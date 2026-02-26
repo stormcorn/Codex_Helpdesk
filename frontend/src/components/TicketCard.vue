@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { Attachment, Ticket, TicketStatusHistory } from '../types';
+import { formatDateTime } from '../utils/datetime';
 import TicketAttachments from './TicketAttachments.vue';
 import TicketStatusHistoryPanel from './TicketStatusHistory.vue';
 
@@ -68,7 +69,7 @@ function onCardClick(event: MouseEvent): void {
         <small>{{ props.open ? '收合' : '展開' }}</small>
       </button>
       <small :class="['ticket-meta', { 'deleted-meta': props.isTicketDeleted(props.ticket) }]">
-        {{ props.ticket.createdByEmployeeId ? `${props.ticket.createdByEmployeeId} ` : '' }}{{ props.ticket.name }} · {{ new Date(props.ticket.createdAt).toLocaleString() }}
+        {{ props.ticket.createdByEmployeeId ? `${props.ticket.createdByEmployeeId} ` : '' }}{{ props.ticket.name }} · {{ formatDateTime(props.ticket.createdAt) }}
         <template v-if="props.ticket.groupName"> · 群組 {{ props.ticket.groupName }}</template>
         <template v-if="props.ticket.categoryName"> · 分類 {{ props.ticket.categoryName }}</template>
       </small>
@@ -124,7 +125,7 @@ function onCardClick(event: MouseEvent): void {
       <div v-if="props.open" class="ticket-content">
         <p :class="{ 'deleted-content': props.isTicketDeleted(props.ticket) }">{{ props.ticket.description }}</p>
         <small>{{ props.ticket.email }}</small>
-        <small v-if="props.ticket.deletedAt"> · 已刪除於 {{ new Date(props.ticket.deletedAt).toLocaleString() }}</small>
+        <small v-if="props.ticket.deletedAt"> · 已刪除於 {{ formatDateTime(props.ticket.deletedAt) }}</small>
 
         <TicketAttachments
           :ticket-id="props.ticket.id"
@@ -139,7 +140,7 @@ function onCardClick(event: MouseEvent): void {
           <ul class="simple-list">
             <li v-for="msg in props.ticket.messages" :key="msg.id">
               <strong>[{{ msg.authorRole }}] {{ msg.authorName }}</strong>：{{ msg.content }}
-              <small> · {{ new Date(msg.createdAt).toLocaleString() }}</small>
+              <small> · {{ formatDateTime(msg.createdAt) }}</small>
             </li>
           </ul>
         </div>

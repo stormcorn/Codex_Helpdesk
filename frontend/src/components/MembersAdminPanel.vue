@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import type { AdminGroup, AuditLogItem, HelpdeskCategory, Member } from '../types';
+import { formatDateTime } from '../utils/datetime';
 
 type AuditFilters = {
   action: string;
@@ -139,7 +140,7 @@ function removeCategory(categoryId: number, categoryName: string): void {
         <li v-for="g in props.adminGroups" :key="g.id" class="group-card">
           <div class="group-head">
             <strong>{{ g.name }}</strong>
-            <small>建立於 {{ new Date(g.createdAt).toLocaleString() }}</small>
+            <small>建立於 {{ formatDateTime(g.createdAt) }}</small>
           </div>
           <ul class="simple-list">
             <li v-for="gm in g.members" :key="`${g.id}-${gm.memberId}`" class="group-member-row">
@@ -171,7 +172,7 @@ function removeCategory(categoryId: number, categoryName: string): void {
         <li v-for="c in props.adminHelpdeskCategories" :key="c.id" class="row">
           <span>
             <strong>{{ c.name }}</strong>
-            <small> · 建立於 {{ new Date(c.createdAt).toLocaleString() }}</small>
+            <small> · 建立於 {{ formatDateTime(c.createdAt) }}</small>
           </span>
           <span class="row">
             <button type="button" @click="editCategory(c.id, c.name)">修改</button>
@@ -235,7 +236,7 @@ function removeCategory(categoryId: number, categoryName: string): void {
         <li v-for="log in props.auditLogs" :key="log.id" class="audit-log-card">
           <div class="audit-log-title">
             <strong>#{{ log.id }} {{ log.action }}</strong>
-            <small>{{ new Date(log.createdAt).toLocaleString() }}</small>
+            <small>{{ formatDateTime(log.createdAt) }}</small>
           </div>
           <small>
             {{ log.actorRole }} {{ log.actorName }} ({{ log.actorEmployeeId }})
