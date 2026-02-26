@@ -209,6 +209,25 @@ cd /opt/fullstack
 ./scripts/deploy_helpdesk.sh
 ```
 
+### 本機一鍵 Release + Deploy（方案 C）
+- 路徑：`scripts/release_and_deploy.sh`
+- 用途：在本機一次完成 `commit + push + remote deploy`
+- 不會在 repo 內寫死機敏主機資訊，請用環境變數設定 remote SSH 目標
+
+建議先設定（本機 shell）：
+```bash
+export DEPLOY_SSH_TARGET="<deploy-user>@<deploy-host>"
+```
+
+使用方式：
+```bash
+# 有本地變更時：commit + push + remote deploy
+./scripts/release_and_deploy.sh "fix: your change"
+
+# 沒有本地變更，只想觸發 remote 部署
+./scripts/release_and_deploy.sh --deploy-only
+```
+
 ## 快速啟動（Docker Compose）
 在 `fullstack` 目錄：
 
