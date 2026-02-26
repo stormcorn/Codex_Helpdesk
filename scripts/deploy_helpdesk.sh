@@ -10,8 +10,9 @@ MAX_RETRIES=$((MAX_WAIT_SECONDS / SLEEP_SECONDS))
 
 cd "$PROJECT_DIR"
 
-echo "== GIT PULL =="
-git pull origin main
+echo "== GIT SYNC (origin/main) =="
+git fetch origin main
+git reset --hard origin/main
 
 echo
 echo "== DEPLOY =="
