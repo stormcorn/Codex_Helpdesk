@@ -1,6 +1,13 @@
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
 body {
   margin: 0;
   background: linear-gradient(160deg, #eef5ff 0%, #f9fcff 55%, #ffffff 100%);
+  overflow-x: hidden;
 }
 
 .page {
@@ -88,6 +95,7 @@ body {
 .row {
   display: flex;
   gap: 10px;
+  flex-wrap: wrap;
 }
 
 .tabs,
@@ -114,6 +122,11 @@ select {
   border-radius: 9px;
   padding: 9px 11px;
   font: inherit;
+  max-width: 100%;
+}
+
+textarea {
+  width: 100%;
 }
 
 button {
@@ -124,6 +137,7 @@ button {
   color: #fff;
   font-weight: 700;
   cursor: pointer;
+  max-width: 100%;
 }
 
 button.active {
@@ -183,6 +197,12 @@ button:disabled {
   border-radius: 12px;
   background: #f8fbff;
   padding: 12px;
+}
+
+.ticket-list li,
+.panel,
+.auth-panel {
+  min-width: 0;
 }
 
 .ticket-card {
@@ -307,6 +327,10 @@ button:disabled {
   flex-wrap: wrap;
 }
 
+.ticket-head > * {
+  min-width: 0;
+}
+
 .ticket-toggle {
   background: transparent;
   color: #172847;
@@ -318,6 +342,13 @@ button:disabled {
   gap: 8px;
   flex: 1;
   text-align: left;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.ticket-toggle strong,
+.ticket-toggle small {
+  overflow-wrap: anywhere;
 }
 
 .ticket-delete-btn {
@@ -334,7 +365,8 @@ button:disabled {
 
 .ticket-meta {
   color: #4a668e;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .deleted-meta {
@@ -471,6 +503,11 @@ button:disabled {
   border-top: 1px dashed #c9d9ef;
 }
 
+.message-box li,
+.simple-list li {
+  overflow-wrap: anywhere;
+}
+
 .status-history-box {
   margin-top: 10px;
   padding-top: 8px;
@@ -521,6 +558,8 @@ button:disabled {
 .member-table {
   width: 100%;
   border-collapse: collapse;
+  display: block;
+  overflow-x: auto;
 }
 
 .member-table th,
@@ -622,6 +661,7 @@ button:disabled {
   justify-content: space-between;
   align-items: center;
   gap: 8px;
+  flex-wrap: wrap;
   margin-bottom: 8px;
 }
 
@@ -666,6 +706,7 @@ button:disabled {
 .stepper {
   display: flex;
   gap: 10px;
+  flex-wrap: wrap;
   margin-bottom: 10px;
 }
 
@@ -721,10 +762,28 @@ button:disabled {
 }
 
 @media (max-width: 760px) {
+  .page {
+    margin: 14px auto;
+    padding: 0 10px 18px;
+  }
+
+  .auth-panel,
+  .panel,
+  .header-panel {
+    padding: 12px;
+  }
+
   .header-panel {
     flex-direction: column;
     align-items: flex-start;
     gap: 8px;
+  }
+
+  .header-actions,
+  .notify-head,
+  .audit-head {
+    width: 100%;
+    flex-wrap: wrap;
   }
 
   .ticket-list-top {
@@ -738,5 +797,33 @@ button:disabled {
 
   .row {
     flex-direction: column;
+  }
+
+  .row > *,
+  .switch-row > *,
+  .tabs > * {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .ticket-filters {
+    grid-template-columns: 1fr;
+  }
+
+  .ticket-head {
+    gap: 8px;
+  }
+
+  .ticket-toggle {
+    width: 100%;
+  }
+
+  .status-select {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .reply-file-field {
+    width: 100%;
   }
 }
