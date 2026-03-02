@@ -23,7 +23,9 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.time.LocalDateTime;
 import java.nio.charset.StandardCharsets;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/api/helpdesk/tickets")
@@ -224,10 +226,34 @@ public class HelpdeskController {
                     ticket.isDeleted(),
                     ticket.getDeletedAt(),
                     ticket.getCreatedAt(),
-                    ticket.getAttachments().stream().map(AttachmentResponse::from).toList(),
-                    service.sortMessagesByCreatedAt(ticket.getMessages()).stream().map(MessageResponse::from).toList(),
-                    service.sortStatusHistoriesByCreatedAt(ticket.getStatusHistories()).stream().map(StatusHistoryResponse::from).toList()
+                    deduplicateAttachments(ticket.getAttachments()),
+                    deduplicateMessages(service.sortMessagesByCreatedAt(ticket.getMessages())),
+                    deduplicateStatusHistories(service.sortStatusHistoriesByCreatedAt(ticket.getStatusHistories()))
             );
+        }
+
+        private static List<AttachmentResponse> deduplicateAttachments(List<HelpdeskAttachment> attachments) {
+            Map<Long, AttachmentResponse> unique = new LinkedHashMap<>();
+            for (HelpdeskAttachment attachment : attachments) {
+                unique.putIfAbsent(attachment.getId(), AttachmentResponse.from(attachment));
+            }
+            return List.copyOf(unique.values());
+        }
+
+        private static List<MessageResponse> deduplicateMessages(List<HelpdeskTicketMessage> messages) {
+            Map<Long, MessageResponse> unique = new LinkedHashMap<>();
+            for (HelpdeskTicketMessage message : messages) {
+                unique.putIfAbsent(message.getId(), MessageResponse.from(message));
+            }
+            return List.copyOf(unique.values());
+        }
+
+        private static List<StatusHistoryResponse> deduplicateStatusHistories(List<HelpdeskTicketStatusHistory> histories) {
+            Map<Long, StatusHistoryResponse> unique = new LinkedHashMap<>();
+            for (HelpdeskTicketStatusHistory history : histories) {
+                unique.putIfAbsent(history.getId(), StatusHistoryResponse.from(history));
+            }
+            return List.copyOf(unique.values());
         }
     }
 

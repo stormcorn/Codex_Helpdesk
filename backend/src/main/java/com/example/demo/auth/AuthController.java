@@ -51,9 +51,21 @@ public class AuthController {
         return Map.of("message", "Logged out", "employeeId", member.getEmployeeId());
     }
 
+    @PostMapping("/change-password")
+    public Map<String, String> changePassword(
+            @RequestHeader(value = "Authorization", required = false) String authorization,
+            @RequestBody ChangePasswordRequest request
+    ) {
+        authService.changePassword(authorization, request.newPassword());
+        return Map.of("message", "Password changed");
+    }
+
     public record RegisterRequest(String employeeId, String name, String email, String password, Long groupId) {
     }
 
     public record LoginRequest(String employeeId, String password) {
+    }
+
+    public record ChangePasswordRequest(String newPassword) {
     }
 }

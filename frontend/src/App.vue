@@ -10,10 +10,12 @@ import { useAdminManagement } from './composables/useAdminManagement';
 import { useBaseData } from './composables/useBaseData';
 import { useDashboardLifecycle } from './composables/useDashboardLifecycle';
 import { useRealtimeTickets } from './composables/useRealtimeTickets';
+import { requestJson } from './composables/useApi';
 import HelpdeskForm from './components/HelpdeskForm.vue';
 import ActiveTicketsPanel from './components/ActiveTicketsPanel.vue';
 import ArchivePanel from './components/ArchivePanel.vue';
 import MembersAdminPanel from './components/MembersAdminPanel.vue';
+import AccountPanel from './components/AccountPanel.vue';
 import NotificationPanel from './components/NotificationPanel.vue';
 import DashboardTabs from './components/DashboardTabs.vue';
 import HeaderPanel from './components/HeaderPanel.vue';
@@ -29,6 +31,10 @@ import type {
 const TOKEN_KEY = 'helpdesk_auth_token';
 
 const dashboardTab = ref<DashboardTab>('helpdesk');
+const accountPasswordNew = ref('');
+const accountPasswordConfirm = ref('');
+const accountPasswordLoading = ref(false);
+const accountPasswordFeedback = ref('');
 let applyMemberProfileHandler: (member: Member) => void = () => {};
 let afterLoginHandler: () => Promise<void> = async () => {};
 let clearSessionHandler: () => void = () => {};
@@ -352,6 +358,43 @@ const dashboardContext = computed<DashboardContext>(() => ({
   unreadCount: unreadCount.value
 }));
 
+async function changeMyPassword(): Promise<void> {
+  accountPasswordFeedback.value = '';
+  if (!accountPasswordNew.value || !accountPasswordConfirm.value) {
+    accountPasswordFeedback.value = '請填寫新密碼與確認密碼。';
+    return;
+  }
+  if (accountPasswordNew.value.length < 8) {
+    accountPasswordFeedback.value = '新密碼至少 8 碼。';
+    return;
+  }
+  if (accountPasswordNew.value !== accountPasswordConfirm.value) {
+    accountPasswordFeedback.value = '新密碼與確認密碼不一致。';
+    return;
+  }
+  accountPasswordLoading.value = true;
+  try {
+    await requestJson<{ message: string }>(
+      '/api/auth/change-password',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({
+          newPassword: accountPasswordNew.value
+        })
+      },
+      '更新密碼失敗'
+    );
+    accountPasswordNew.value = '';
+    accountPasswordConfirm.value = '';
+    accountPasswordFeedback.value = '密碼已更新。';
+  } catch (e) {
+    accountPasswordFeedback.value = e instanceof Error ? e.message : '更新密碼失敗';
+  } finally {
+    accountPasswordLoading.value = false;
+  }
+}
+
 const currentMemberId = computed(() => currentMember.value?.id ?? null);
 
 const { connectRealtimeTickets, disconnectRealtimeTickets } = useRealtimeTickets({
@@ -466,6 +509,16 @@ onBeforeUnmount(() => {
         @toggle-ticket="toggleTicket"
         @open-image-lightbox="openImageLightbox"
         @download-attachment="downloadAttachment"
+      />
+
+      <AccountPanel
+        v-if="dashboardTab === 'account'"
+        v-model:new-password="accountPasswordNew"
+        v-model:confirm-password="accountPasswordConfirm"
+        :current-member="currentMember"
+        :loading="accountPasswordLoading"
+        :feedback="accountPasswordFeedback"
+        @change-password="changeMyPassword"
       />
 
       <MembersAdminPanel

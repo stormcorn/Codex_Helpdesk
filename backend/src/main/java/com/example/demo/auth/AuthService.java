@@ -98,6 +98,23 @@ public class AuthService {
         authTokenService.revokeTokenIfPresent(token);
     }
 
+    @Transactional
+    public void changePassword(String authorizationHeader, String newPassword) {
+        validateRequired(newPassword, "New password is required");
+
+        if (newPassword.length() < 8) {
+            throw new ResponseStatusException(BAD_REQUEST, "Password must be at least 8 characters");
+        }
+
+        Member member = requireMember(authorizationHeader);
+        if (PASSWORD_ENCODER.matches(newPassword, member.getPasswordHash())) {
+            throw new ResponseStatusException(BAD_REQUEST, "New password must be different from current password");
+        }
+
+        member.setPasswordHash(PASSWORD_ENCODER.encode(newPassword));
+        memberRepository.save(member);
+    }
+
     @Transactional(readOnly = true)
     public Member requireMember(String authorizationHeader) {
         return authTokenService.requireMemberByAuthorizationHeader(authorizationHeader);

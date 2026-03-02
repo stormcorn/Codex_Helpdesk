@@ -22,6 +22,7 @@ const emit = defineEmits<{
       IT 工單處理
     </button>
     <button :class="{ active: props.context.dashboardTab === 'archive' }" @click="emit('setTab', 'archive')">封存</button>
+    <button :class="{ active: props.context.dashboardTab === 'account' }" @click="emit('setTab', 'account')">帳號管理</button>
     <button
       v-if="props.context.isAdmin"
       :class="{ active: props.context.dashboardTab === 'members' }"

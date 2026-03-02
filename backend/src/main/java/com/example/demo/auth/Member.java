@@ -81,6 +81,10 @@ public class Member {
         return role;
     }
 
+    public void setPasswordHash(String passwordHash) {
+        this.passwordHash = passwordHash;
+    }
+
     public LocalDateTime getCreatedAt() {
         return createdAt;
     }

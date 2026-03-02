@@ -1,7 +1,7 @@
 export type Role = 'ADMIN' | 'IT' | 'USER';
 
 export type AuthMode = 'login' | 'register';
-export type DashboardTab = 'helpdesk' | 'itdesk' | 'archive' | 'members';
+export type DashboardTab = 'helpdesk' | 'itdesk' | 'archive' | 'members' | 'account';
 export type FeedbackType = 'success' | 'error' | '';
 export type SortOrder = 'newest' | 'oldest';
 
