@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, ref } from 'vue';
 import type { AuthMode, LoginForm, PublicGroupOption, RegisterForm } from '../types';
 
 const props = defineProps<{
@@ -25,6 +25,9 @@ const authModeModel = computed({
   set: (mode: AuthMode) => emit('update:authMode', mode)
 });
 
+const showLoginPassword = ref(false);
+const rememberLogin = ref(false);
+
 function submitRegisterForm(): void {
   if (props.registerStep === 3) {
     emit('register');
@@ -35,22 +38,131 @@ function submitRegisterForm(): void {
 </script>
 
 <template>
-  <section class="auth-panel">
+  <section v-if="authModeModel === 'login'" class="auth-panel auth-login-shell">
+    <div class="auth-login-hero">
+      <div class="auth-hero-orb auth-hero-orb-a"></div>
+      <div class="auth-hero-orb auth-hero-orb-b"></div>
+      <div class="auth-hero-content">
+        <div class="auth-hero-brand-mark">🎧</div>
+        <h1>工單管理系統</h1>
+        <p>Helpdesk Management System</p>
+        <ul class="auth-hero-feature-list">
+          <li>
+            <div class="auth-hero-feature-icon">🎫</div>
+            <div>
+              <strong>智慧工單管理</strong>
+              <small>高效追蹤與處理企業內部服務請求</small>
+            </div>
+          </li>
+          <li>
+            <div class="auth-hero-feature-icon">👥</div>
+            <div>
+              <strong>多角色協作</strong>
+              <small>支援使用者、IT 與管理員權限管理</small>
+            </div>
+          </li>
+          <li>
+            <div class="auth-hero-feature-icon">📈</div>
+            <div>
+              <strong>即時監控分析</strong>
+              <small>完整稽核紀錄與通知追蹤</small>
+            </div>
+          </li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="auth-login-pane">
+      <div class="auth-login-mobile-brand">
+        <div class="auth-login-mobile-mark">🎧</div>
+        <h2>企業工單系統</h2>
+      </div>
+
+      <div class="auth-login-header">
+        <h2>歡迎回來</h2>
+        <p class="subtitle">請登入您的帳號以繼續使用系統</p>
+      </div>
+
+      <div class="auth-role-info-card">
+        <div class="auth-role-info-icon">i</div>
+        <div class="auth-role-info-text">
+          <h4>系統角色說明</h4>
+          <ul>
+            <li><strong>USER</strong><span>一般使用者 - 建立與查看個人工單</span></li>
+            <li><strong>MANAGER</strong><span>群組主管 - 確認急件工單優先處理</span></li>
+            <li><strong>SUPPORT</strong><span>支援人員 - 處理與回應工單</span></li>
+            <li><strong>ADMIN</strong><span>管理員 - 完整系統管理權限</span></li>
+          </ul>
+        </div>
+      </div>
+
+      <form class="auth-login-form" @submit.prevent="emit('login')">
+        <label>
+          工號
+          <span class="required-mark">*</span>
+          <div class="auth-input-wrap">
+            <span class="auth-input-icon">🪪</span>
+            <input v-model="props.loginForm.employeeId" placeholder="請輸入工號" required />
+          </div>
+        </label>
+
+        <label>
+          密碼
+          <span class="required-mark">*</span>
+          <div class="auth-input-wrap">
+            <span class="auth-input-icon">🔒</span>
+            <input
+              v-model="props.loginForm.password"
+              :type="showLoginPassword ? 'text' : 'password'"
+              placeholder="請輸入密碼"
+              required
+            />
+            <button type="button" class="auth-input-trailing" @click="showLoginPassword = !showLoginPassword">
+              {{ showLoginPassword ? '隱藏' : '顯示' }}
+            </button>
+          </div>
+        </label>
+
+        <div class="auth-login-options">
+          <label class="auth-check-inline">
+            <input v-model="rememberLogin" type="checkbox" />
+            <span>記住我</span>
+          </label>
+          <button type="button" class="auth-link-btn" disabled title="尚未實作">忘記密碼？</button>
+        </div>
+
+        <div class="auth-login-lang">語系：繁體中文</div>
+
+        <button :disabled="props.authLoading" type="submit" class="auth-login-submit">
+          {{ props.authLoading ? '登入中...' : '登入系統' }}
+        </button>
+      </form>
+
+      <div class="auth-login-register">
+        <p>還沒有帳號？</p>
+        <button type="button" class="auth-link-btn auth-register-jump" @click="authModeModel = 'register'">前往註冊</button>
+      </div>
+
+      <div class="auth-login-footer">
+        <span>使用條款</span>
+        <span>隱私政策</span>
+        <span>技術支援</span>
+      </div>
+    </div>
+
+    <p v-if="props.authError" class="feedback error auth-login-error">{{ props.authError }}</p>
+  </section>
+
+  <section v-else class="auth-panel">
     <h1>Helpdesk Member Portal</h1>
     <p class="subtitle">登入或註冊後即可提交工單。管理員可指派 IT 角色處理工單。</p>
 
     <div class="switch-row">
-      <button :class="{ active: authModeModel === 'login' }" @click="authModeModel = 'login'">登入</button>
-      <button :class="{ active: authModeModel === 'register' }" @click="authModeModel = 'register'">註冊</button>
+      <button @click="authModeModel = 'login'">登入</button>
+      <button :class="{ active: true }" @click="authModeModel = 'register'">註冊</button>
     </div>
 
-    <form v-if="authModeModel === 'login'" class="form-grid" @submit.prevent="emit('login')">
-      <label>帳號（員工工號）<input v-model="props.loginForm.employeeId" required /></label>
-      <label>密碼<input v-model="props.loginForm.password" type="password" required /></label>
-      <button :disabled="props.authLoading" type="submit">{{ props.authLoading ? '登入中...' : '登入' }}</button>
-    </form>
-
-    <div v-else>
+    <div>
       <div class="stepper">
         <span :class="{ on: props.registerStep >= 1 }">1</span>
         <span :class="{ on: props.registerStep >= 2 }">2</span>
@@ -89,7 +201,5 @@ function submitRegisterForm(): void {
         </div>
       </form>
     </div>
-
-    <p v-if="props.authError" class="feedback error">{{ props.authError }}</p>
   </section>
 </template>
